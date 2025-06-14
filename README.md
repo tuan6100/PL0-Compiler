@@ -65,6 +65,21 @@ This implementation extends standard Wirth's PL/0 with modern programming langua
   - Return values with `RETURN expression;`.
   - Procedures can be used directly as expressions or function calls.
 
+### 5. Static Variables & Constants
+Static variables and constants persist their state across multiple procedure invocations while retaining local procedure scope visibility:
+- **Prefix Syntax** (applies `STATIC` to all items in the declaration clause):
+  ```pascal
+  STATIC VAR counter = 0, total = 100;
+  STATIC CONST limit = 50;
+  ```
+- **Suffix / Item Syntax** (applies `STATIC` to a specific variable or constant):
+  ```pascal
+  VAR x = 0 STATIC;
+  VAR count STATIC;
+  VAR arr[10] STATIC;
+  CONST max = 0 STATIC;
+  ```
+
 ---
 
 ## Building and Running

@@ -26,6 +26,7 @@ const Keyword keywords[KEYWORDS_COUNT] = {
 	{"READLN", KW_READ},
 	{"RETURN", KW_RETURN},
 	{"SIZEOF", KW_SIZEOF},
+	{"STATIC", KW_STATIC},
 	{"STEP", KW_STEP},
 	{"THEN", KW_THEN},
 	{"TO", KW_TO},
@@ -37,7 +38,7 @@ const Keyword keywords[KEYWORDS_COUNT] = {
 
 const char TabToken[][12] = {	"NONE", "IDENT", "NUMBER", "STRING",
 		"BEGIN", "CALL", "CONST", "DO",  "ELSE", "END", "FOR", "IF",
-		"ODD", "PROCEDURE", "PROGRAM", "READ", "RETURN", "SIZEOF", "THEN", "TO", "VAR", "WHILE", "WRITE", "WRITELN",
+		"ODD", "PROCEDURE", "PROGRAM", "READ", "RETURN", "SIZEOF", "STATIC", "THEN", "TO", "VAR", "WHILE", "WRITE", "WRITELN",
 		"DOWNTO", "STEP",
 		"AND", "OR", "NOT", "NULL",
 

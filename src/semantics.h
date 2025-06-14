@@ -28,6 +28,7 @@ typedef struct {
     int initSize; // Initialized element count for arrays (0 when not set)
     int isString; // 1 for STRING declarations, 0 otherwise
     int isRefParam; // 1 when this symbol is a VAR parameter
+    int isStatic; // 1 when symbol is declared STATIC
     int paramCount; // Procedure parameter count
     int paramIsRef[MAX_PROC_PARAMS]; // Procedure parameter passing mode
     int paramSize[MAX_PROC_PARAMS]; // Formal parameter size (1 for scalar, >1 for array)
@@ -52,6 +53,7 @@ typedef struct {
 } SymbolTable;
 
 void initSymbolTable(void);
+void enterObject(char *name, ObjectType type, double value, int size, int isString, int isStatic);
 void enter(char *name, ObjectType type, double value, int size, int isString);
 Object* lookup(char *name);
 void enterBlock(void);

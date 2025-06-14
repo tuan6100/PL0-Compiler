@@ -10,6 +10,6 @@ PROCEDURE P;
 
 BEGIN
   x++;
-  P;
+  P();
   WRITEln(x);
 END
