@@ -52,6 +52,8 @@ typedef struct {
 
 static PendingVarInit pendingInitFrames[MAX_NESTING_LEVEL][MAX_SYMBOL_TABLE_SIZE];
 static PendingRuntimeArrayInit pendingRuntimeArrayInitFrames[MAX_NESTING_LEVEL][MAX_SYMBOL_TABLE_SIZE];
+static PendingVarInit staticPendingInits[MAX_SYMBOL_TABLE_SIZE];
+static int staticPendingInitCount = 0;
 
 static const char *interpExprPtr;
 
@@ -2210,7 +2212,16 @@ void block(void) {
         pendingParamLevel = -1;
     }
 
-    while (token == KW_CONST || token == KW_VAR || token == KW_PROCEDURE) {
+    while (token == KW_CONST || token == KW_VAR || token == KW_PROCEDURE || token == KW_STATIC) {
+        int prefixStatic = 0;
+        if (token == KW_STATIC) {
+            prefixStatic = 1;
+            nextToken();
+            if (token != KW_CONST && token != KW_VAR) {
+                error("STATIC must be followed by CONST or VAR");
+            }
+        }
+
         if (token == KW_CONST) {
             nextToken();
             do {
@@ -2246,62 +2257,114 @@ void block(void) {
                 }
                 nextToken();
 
+                int isItemStatic = prefixStatic;
+
                 if (dimCount > 0) {
                     if (token != SB_LBRACK) {
                         error("immutable array initializer must use bracket list");
                     }
-                    if (pendingInitCount >= MAX_SYMBOL_TABLE_SIZE) {
-                        error("too many variable initializers in block");
+
+                    double arrayVals[MAX_ARRAY_INIT_VALUES];
+                    int arrayValCount = 0;
+                    parseConstArrayLiteralValues(arrayVals, &arrayValCount, MAX_ARRAY_INIT_VALUES);
+                    if (arrayValCount != totalSize) {
+                        error("immutable array initializer size mismatch");
                     }
 
-                    enter(name, OBJ_VARIABLE, 0, totalSize, 0);
+                    if (token == KW_STATIC) {
+                        isItemStatic = 1;
+                        nextToken();
+                    }
+
+                    enterObject(name, OBJ_VARIABLE, 0, totalSize, 0, isItemStatic);
                     Object *arrObj = lookup(name);
                     arrObj->isImmutable = 1;
                     arrObj->dimCount = dimCount;
                     for (int d = 0; d < dimCount; d++) {
                         arrObj->dims[d] = dims[d];
                     }
+                    arrObj->initSize = arrayValCount;
 
-                    pendingInit[pendingInitCount].target = arrObj;
-                    pendingInit[pendingInitCount].kind = VAR_INIT_ARRAY_LITERAL;
-                    pendingInit[pendingInitCount].exprCount = 0;
-                    pendingInit[pendingInitCount].arrayCount = 0;
-
-                    parseConstArrayLiteralValues(pendingInit[pendingInitCount].arrayValues,
-                                                &pendingInit[pendingInitCount].arrayCount,
-                                                MAX_ARRAY_INIT_VALUES);
-                    if (pendingInit[pendingInitCount].arrayCount != totalSize) {
-                        error("immutable array initializer size mismatch");
+                    PendingVarInit *targetInitList;
+                    int *targetInitCount;
+                    if (isItemStatic) {
+                        targetInitList = staticPendingInits;
+                        targetInitCount = &staticPendingInitCount;
+                    } else {
+                        targetInitList = pendingInit;
+                        targetInitCount = &pendingInitCount;
                     }
-                    arrObj->initSize = pendingInit[pendingInitCount].arrayCount;
-                    pendingInitCount++;
+                    if (*targetInitCount >= MAX_SYMBOL_TABLE_SIZE) {
+                        error("too many variable initializers in block");
+                    }
+                    targetInitList[*targetInitCount].target = arrObj;
+                    targetInitList[*targetInitCount].kind = VAR_INIT_ARRAY_LITERAL;
+                    targetInitList[*targetInitCount].exprCount = 0;
+                    targetInitList[*targetInitCount].arrayCount = arrayValCount;
+                    for (int k = 0; k < arrayValCount; k++) {
+                        targetInitList[*targetInitCount].arrayValues[k] = arrayVals[k];
+                    }
+                    (*targetInitCount)++;
 
                 } else if (token == TK_STRING) {
-                    enter(name, OBJ_CONSTANT, 0, 0, 0);
+                    char strVal[MAX_STRING_LEN + 1];
+                    snprintf(strVal, sizeof(strVal), "%s", StringLiteral);
+                    nextToken();
+                    if (token == KW_STATIC) {
+                        isItemStatic = 1;
+                        nextToken();
+                    }
+                    enterObject(name, OBJ_CONSTANT, 0, 0, 0, isItemStatic);
                     Object *obj = lookup(name);
                     obj->constIsString = 1;
-                    strncpy(obj->constString, StringLiteral, MAX_STRING_LEN);
-                    obj->constString[MAX_STRING_LEN] = '\0';
-                    nextToken();
+                    snprintf(obj->constString, sizeof(obj->constString), "%s", strVal);
                 } else {
-                    if (getCurrentLevel() > 1) {
-                        if (pendingInitCount >= MAX_SYMBOL_TABLE_SIZE) {
-                            error("too many variable initializers in block");
+                    if (getCurrentLevel() > 1 && !isItemStatic) {
+                        Instruction exprBuf[MAX_INIT_EXPR_CODE];
+                        int exprBufCount = 0;
+                        parseInitExpression(exprBuf, &exprBufCount, MAX_INIT_EXPR_CODE);
+                        if (token == KW_STATIC) {
+                            isItemStatic = 1;
+                            nextToken();
                         }
-                        enter(name, OBJ_VARIABLE, 0, 1, 0);
-                        Object *obj = lookup(name);
-                        obj->isImmutable = 1;
-                        pendingInit[pendingInitCount].target = obj;
-                        pendingInit[pendingInitCount].kind = VAR_INIT_SCALAR_EXPR;
-                        pendingInit[pendingInitCount].exprCount = 0;
-                        pendingInit[pendingInitCount].arrayCount = 0;
-                        parseInitExpression(pendingInit[pendingInitCount].exprCode,
-                                            &pendingInit[pendingInitCount].exprCount,
-                                            MAX_INIT_EXPR_CODE);
-                        pendingInitCount++;
+                        if (isItemStatic) {
+                            enterObject(name, OBJ_VARIABLE, 0, 1, 0, 1);
+                            Object *obj = lookup(name);
+                            obj->isImmutable = 1;
+                            if (staticPendingInitCount >= MAX_SYMBOL_TABLE_SIZE) {
+                                error("too many variable initializers in block");
+                            }
+                            staticPendingInits[staticPendingInitCount].target = obj;
+                            staticPendingInits[staticPendingInitCount].kind = VAR_INIT_SCALAR_EXPR;
+                            staticPendingInits[staticPendingInitCount].exprCount = exprBufCount;
+                            staticPendingInits[staticPendingInitCount].arrayCount = 0;
+                            for (int k = 0; k < exprBufCount; k++) {
+                                staticPendingInits[staticPendingInitCount].exprCode[k] = exprBuf[k];
+                            }
+                            staticPendingInitCount++;
+                        } else {
+                            if (pendingInitCount >= MAX_SYMBOL_TABLE_SIZE) {
+                                error("too many variable initializers in block");
+                            }
+                            enterObject(name, OBJ_VARIABLE, 0, 1, 0, 0);
+                            Object *obj = lookup(name);
+                            obj->isImmutable = 1;
+                            pendingInit[pendingInitCount].target = obj;
+                            pendingInit[pendingInitCount].kind = VAR_INIT_SCALAR_EXPR;
+                            pendingInit[pendingInitCount].exprCount = exprBufCount;
+                            pendingInit[pendingInitCount].arrayCount = 0;
+                            for (int k = 0; k < exprBufCount; k++) {
+                                pendingInit[pendingInitCount].exprCode[k] = exprBuf[k];
+                            }
+                            pendingInitCount++;
+                        }
                     } else {
                         double value = parseConstExpression();
-                        enter(name, OBJ_CONSTANT, value, 0, 0);
+                        if (token == KW_STATIC) {
+                            isItemStatic = 1;
+                            nextToken();
+                        }
+                        enterObject(name, OBJ_CONSTANT, value, 0, 0, isItemStatic);
                     }
                 }
                 if (token == SB_COMMA) nextToken(); else break;
@@ -2436,9 +2499,46 @@ void block(void) {
                         expect(SB_RBRACK);
                     }
                 }
-                enter(varName, OBJ_VARIABLE, 0, isRuntimeArray ? (1 + runtimeDimCount) : size, 0);
+
+                int hasInit = 0;
+                VarInitKind initKind = VAR_INIT_SCALAR_EXPR;
+                Instruction initExprBuf[MAX_INIT_EXPR_CODE];
+                int initExprBufCount = 0;
+                double initArrayValues[MAX_ARRAY_INIT_VALUES];
+                int initArrayCount = 0;
+
+                if (token == SB_EQU || token == SB_ASSIGN) {
+                    hasInit = 1;
+                    nextToken();
+                    if (isRuntimeArray) {
+                        error("Runtime-sized arrays do not support initializer lists");
+                    } else if (size > 1) {
+                        if (token != SB_LBRACK) {
+                            error("Array initializer must use bracket list, e.g. VAR A[4] := [1,2]");
+                        }
+                        initKind = VAR_INIT_ARRAY_LITERAL;
+                        parseVarArrayLiteralValues(initArrayValues, &initArrayCount, MAX_ARRAY_INIT_VALUES);
+                        if (initArrayCount > size) {
+                            error("array initializer has more elements than declared size");
+                        }
+                    } else {
+                        initKind = VAR_INIT_SCALAR_EXPR;
+                        parseInitExpression(initExprBuf, &initExprBufCount, MAX_INIT_EXPR_CODE);
+                    }
+                }
+
+                int isItemStatic = prefixStatic;
+                if (token == KW_STATIC) {
+                    isItemStatic = 1;
+                    nextToken();
+                }
+
+                enterObject(varName, OBJ_VARIABLE, 0, isRuntimeArray ? (1 + runtimeDimCount) : size, 0, isItemStatic);
                 Object *declObj = lookup(varName);
                 if (isRuntimeArray) {
+                    if (isItemStatic) {
+                        error("Runtime-sized arrays cannot be STATIC");
+                    }
                     declObj->isRuntimeArray = 1;
                     declObj->lengthAddress = declObj->address + 1;
                     declObj->dimCount = runtimeDimCount;
@@ -2479,40 +2579,33 @@ void block(void) {
                     }
                 }
 
-                if (token == SB_EQU || token == SB_ASSIGN) {
-                    nextToken();
-                    if (pendingInitCount >= MAX_SYMBOL_TABLE_SIZE) {
+                if (hasInit) {
+                    if (initKind == VAR_INIT_ARRAY_LITERAL) {
+                        declObj->initSize = initArrayCount;
+                    }
+                    PendingVarInit *targetInitList;
+                    int *targetInitCount;
+                    if (isItemStatic) {
+                        targetInitList = staticPendingInits;
+                        targetInitCount = &staticPendingInitCount;
+                    } else {
+                        targetInitList = pendingInit;
+                        targetInitCount = &pendingInitCount;
+                    }
+                    if (*targetInitCount >= MAX_SYMBOL_TABLE_SIZE) {
                         error("too many variable initializers in block");
                     }
-
-                    pendingInit[pendingInitCount].target = lookup(varName);
-                    pendingInit[pendingInitCount].exprCount = 0;
-                    pendingInit[pendingInitCount].arrayCount = 0;
-
-                    if (isRuntimeArray) {
-                        error("Runtime-sized arrays do not support initializer lists");
-                    } else if (size > 1) {
-                        if (token != SB_LBRACK) {
-                            error("Array initializer must use bracket list, e.g. VAR A[4] := [1,2]");
-                        }
-                        pendingInit[pendingInitCount].kind = VAR_INIT_ARRAY_LITERAL;
-                        parseVarArrayLiteralValues(pendingInit[pendingInitCount].arrayValues,
-                                                   &pendingInit[pendingInitCount].arrayCount,
-                                                   MAX_ARRAY_INIT_VALUES);
-                        if (pendingInit[pendingInitCount].arrayCount > size) {
-                            error("array initializer has more elements than declared size");
-                        }
-                        if (pendingInit[pendingInitCount].target != NULL) {
-                            pendingInit[pendingInitCount].target->initSize = pendingInit[pendingInitCount].arrayCount;
-                        }
-                    } else {
-                        pendingInit[pendingInitCount].kind = VAR_INIT_SCALAR_EXPR;
-                        parseInitExpression(pendingInit[pendingInitCount].exprCode,
-                                            &pendingInit[pendingInitCount].exprCount,
-                                            MAX_INIT_EXPR_CODE);
+                    targetInitList[*targetInitCount].target = declObj;
+                    targetInitList[*targetInitCount].kind = initKind;
+                    targetInitList[*targetInitCount].exprCount = initExprBufCount;
+                    targetInitList[*targetInitCount].arrayCount = initArrayCount;
+                    for (int k = 0; k < initExprBufCount; k++) {
+                        targetInitList[*targetInitCount].exprCode[k] = initExprBuf[k];
                     }
-
-                    pendingInitCount++;
+                    for (int k = 0; k < initArrayCount; k++) {
+                        targetInitList[*targetInitCount].arrayValues[k] = initArrayValues[k];
+                    }
+                    (*targetInitCount)++;
                 }
 
                 if (token == SB_COMMA) nextToken(); else break;
@@ -2620,6 +2713,28 @@ void block(void) {
     code[tx0].a = cx;
     emit(INT, 0, getVarCount() + 3);
 
+    // If this is the root program level (frameIdx == 0), initialize static variables first
+    if (frameIdx == 0) {
+        for (int i = 0; i < staticPendingInitCount; i++) {
+            if (staticPendingInits[i].kind == VAR_INIT_SCALAR_EXPR) {
+                for (int k = 0; k < staticPendingInits[i].exprCount; k++) {
+                    emit(staticPendingInits[i].exprCode[k].op,
+                         staticPendingInits[i].exprCode[k].l,
+                         staticPendingInits[i].exprCode[k].a);
+                }
+                emitStoreObjectValue(staticPendingInits[i].target);
+            } else if (staticPendingInits[i].kind == VAR_INIT_ARRAY_LITERAL) {
+                for (int k = 0; k < staticPendingInits[i].arrayCount; k++) {
+                    emitLoadObjectAddress(staticPendingInits[i].target);
+                    emit(LIT, 0, k);
+                    emit(OPR, 0, 2);
+                    emit(LIT, 0, staticPendingInits[i].arrayValues[k]);
+                    emit(STI, 0, 0);
+                }
+            }
+        }
+    }
+
     // Initialize scalar immutable/runtime values first (may feed VLA dimensions).
     for (int i = 0; i < pendingInitCount; i++) {
         if (pendingInit[i].kind == VAR_INIT_SCALAR_EXPR) {
@@ -2669,8 +2784,9 @@ void block(void) {
     exitBlock();
 }
 
-void program(void) {
+void parseProgram(void) {
     hasLookahead = 0;
+    staticPendingInitCount = 0;
     initSymbolTable();
     cx = 0;
     // expect(KW_PROGRAM);
@@ -2679,9 +2795,9 @@ void program(void) {
         if (token != TK_IDENT) {
             error("program: expected program name");
         }
+        nextToken();
+        expect(SB_SEMICOLON);
     }
-    nextToken();
-    expect(SB_SEMICOLON);
     block();
     if (token == SB_PERIOD) {
         nextToken();
@@ -2690,7 +2806,10 @@ void program(void) {
         error("program: unexpected token after '.'");
     }
     optimizeCode();
-    // listCode();
+}
+
+void program(void) {
+    parseProgram();
     interpret();
 }
 

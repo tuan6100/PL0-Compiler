@@ -5,12 +5,15 @@
 
 static SymbolTable symbolTable;
 static int currentLevel = 0;
+static int globalRootVarCount = 0;
 
 void initSymbolTable(void) {
     symbolTable.count = 0;
+    globalRootVarCount = 0;
+    currentLevel = 0;
 }
 
-void enter(char *name, ObjectType type, double value, int size, int isString) {
+void enterObject(char *name, ObjectType type, double value, int size, int isString, int isStatic) {
     // Check if the identifier is already declared in the current scope
     int startIdx = (currentLevel > 0) ? symbolTable.prev_count[currentLevel - 1] : 0;
     for (int i = startIdx; i < symbolTable.count; i++) {
@@ -32,7 +35,8 @@ void enter(char *name, ObjectType type, double value, int size, int isString) {
     obj->value = value;
     obj->constIsString = 0;
     obj->constString[0] = '\0';
-    obj->level = currentLevel;
+    obj->level = (isStatic || currentLevel <= 1) ? 1 : currentLevel;
+    obj->isStatic = isStatic;
     obj->size = ((type == OBJ_VARIABLE || type == OBJ_PARAMETER) && size > 0) ? size : 0;
     obj->isRuntimeArray = 0;
     obj->lengthAddress = -1;
@@ -59,23 +63,36 @@ void enter(char *name, ObjectType type, double value, int size, int isString) {
     }
 
     if (type == OBJ_VARIABLE) {
-        // Compute current scope stack offset for this variable/array/string.
-        int varCount = 0;
-        int sIdx = (currentLevel > 0) ? symbolTable.prev_count[currentLevel - 1] : 0;
-        for (int j = sIdx; j < symbolTable.count - 1; j++) {
-            if (symbolTable.symbols[j].type == OBJ_VARIABLE) {
-                varCount += symbolTable.symbols[j].size;
+        if (isStatic || currentLevel <= 1) {
+            obj->level = 1;
+            obj->address = 3 + globalRootVarCount;
+            globalRootVarCount += obj->size;
+        } else {
+            // Compute local scope stack offset excluding static variables.
+            int varCount = 0;
+            int sIdx = (currentLevel > 0) ? symbolTable.prev_count[currentLevel - 1] : 0;
+            for (int j = sIdx; j < symbolTable.count - 1; j++) {
+                if (symbolTable.symbols[j].type == OBJ_VARIABLE && !symbolTable.symbols[j].isStatic) {
+                    varCount += symbolTable.symbols[j].size;
+                }
             }
+            obj->address = 3 + varCount;
         }
-        obj->address = 3 + varCount; // static link, dynamic link, return address
     }
 }
 
+void enter(char *name, ObjectType type, double value, int size, int isString) {
+    enterObject(name, type, value, size, isString, 0);
+}
+
 int getVarCount(void) {
+    if (currentLevel <= 1) {
+        return globalRootVarCount;
+    }
     int varCount = 0;
     int startIdx = (currentLevel > 0) ? symbolTable.prev_count[currentLevel - 1] : 0;
     for (int i = startIdx; i < symbolTable.count; i++) {
-        if (symbolTable.symbols[i].type == OBJ_VARIABLE) {
+        if (symbolTable.symbols[i].type == OBJ_VARIABLE && !symbolTable.symbols[i].isStatic) {
             varCount += symbolTable.symbols[i].size;
         }
     }

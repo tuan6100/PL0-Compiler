@@ -3,8 +3,8 @@
 #include <ctype.h>
 #include <stdlib.h>
 #include "scanner.h"
-
 #include "parser.h"
+#include "codegen.h"
 
 const Keyword keywords[KEYWORDS_COUNT] = {
 	{"AND", KW_AND},
@@ -26,6 +26,7 @@ const Keyword keywords[KEYWORDS_COUNT] = {
 	{"READLN", KW_READ},
 	{"RETURN", KW_RETURN},
 	{"SIZEOF", KW_SIZEOF},
+	{"STATIC", KW_STATIC},
 	{"STEP", KW_STEP},
 	{"THEN", KW_THEN},
 	{"TO", KW_TO},
@@ -37,7 +38,7 @@ const Keyword keywords[KEYWORDS_COUNT] = {
 
 const char TabToken[][12] = {	"NONE", "IDENT", "NUMBER", "STRING",
 		"BEGIN", "CALL", "CONST", "DO",  "ELSE", "END", "FOR", "IF",
-		"ODD", "PROCEDURE", "PROGRAM", "READ", "RETURN", "SIZEOF", "THEN", "TO", "VAR", "WHILE", "WRITE", "WRITELN",
+		"ODD", "PROCEDURE", "PROGRAM", "READ", "RETURN", "SIZEOF", "STATIC", "THEN", "TO", "VAR", "WHILE", "WRITE", "WRITELN",
 		"DOWNTO", "STEP",
 		"AND", "OR", "NOT", "NULL",
 
@@ -288,16 +289,17 @@ TokenType getToken() {
 	}
 }
 
-void compile(char * filename) {
+int compileSource(const char * filename) {
 	if((f = fopen(filename, "rt")) == NULL) {
 		fprintf(stderr, "File %s not found\n", filename);
-		exit(1);
+		return -1;
 	}
 	const char *ext = strrchr(filename, '.');
 	const char *expectedExt = ".pl0";
-	if (strcmp(ext, expectedExt) != 0) {
+	if (ext == NULL || strcmp(ext, expectedExt) != 0) {
 		fprintf(stderr, "Not PL/0 source file, expected *%s\n", expectedExt);
-		exit(1);
+		fclose(f);
+		return -1;
 	}
 	strncpy(currentSourceFile, filename, sizeof(currentSourceFile) - 1);
 	currentSourceFile[sizeof(currentSourceFile) - 1] = '\0';
@@ -309,6 +311,13 @@ void compile(char * filename) {
 	TokenColumn = 1;
 	ch = ' ';
 	nextToken();
-	program();
+	parseProgram();
 	fclose(f);
+	return 0;
+}
+
+void compile(char * filename) {
+	if (compileSource(filename) == 0) {
+		interpret();
+	}
 }
