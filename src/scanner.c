@@ -9,16 +9,18 @@
 const Keyword keywords[KEYWORDS_COUNT] = {
 	{"AND", KW_AND},
 	{"BEGIN", KW_BEGIN},
+	{"CALL", KW_CALL},
 	{"CONST", KW_CONST},
 	{"DO", KW_DO},
 	{"DOWNTO", KW_DOWNTO},
 	{"ELSE", KW_ELSE},
 	{"END", KW_END},
 	{"FOR", KW_FOR},
+	{"FUNCTION", KW_FUNCTION},
 	{"IF", KW_IF},
 	{"NOT", KW_NOT},
 	{"NULL", KW_NULL},
-   	{"ODD",KW_ODD},
+   	{"ODD", KW_ODD},
 	{"OR", KW_OR},
 	{"PROCEDURE", KW_PROCEDURE},
 	{"PROGRAM", KW_PROGRAM},
@@ -37,7 +39,7 @@ const Keyword keywords[KEYWORDS_COUNT] = {
 };
 
 const char TabToken[][12] = {	"NONE", "IDENT", "NUMBER", "STRING",
-		"BEGIN", "CALL", "CONST", "DO",  "ELSE", "END", "FOR", "IF",
+		"BEGIN", "CALL", "CONST", "DO",  "ELSE", "END", "FOR", "FUNCTION", "IF",
 		"ODD", "PROCEDURE", "PROGRAM", "READ", "RETURN", "SIZEOF", "STATIC", "THEN", "TO", "VAR", "WHILE", "WRITE", "WRITELN",
 		"DOWNTO", "STEP",
 		"AND", "OR", "NOT", "NULL",
@@ -311,7 +313,7 @@ int compileSource(const char * filename) {
 	TokenColumn = 1;
 	ch = ' ';
 	nextToken();
-	parseProgram();
+	program();
 	fclose(f);
 	return 0;
 }

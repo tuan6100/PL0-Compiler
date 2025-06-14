@@ -158,21 +158,18 @@ OpCode getOpCodeByName(const char *name) {
     return (OpCode)-1;
 }
 
-void listCode(void) {
-    printf("--- Code Generation ---\n");
+void listCode() {
     if (stringLiteralCount > 0) {
-        printf("--- String Pool (%d entries) ---\n", stringLiteralCount);
         for (int i = 0; i < stringLiteralCount; i++) {
             printf("[%2d] \"%s\"\n", i, stringLiterals[i]);
         }
-        printf("--------------------------------\n");
     }
     for (int i = 0; i < cx; i++) {
         printf("%3d %-4s %2d %g\n", i, getOpCodeName(code[i].op), code[i].l, code[i].a);
     }
 }
 
-void resetCodeGen(void) {
+void resetCodeGen() {
     cx = 0;
     stringLiteralCount = 0;
     memset(code, 0, sizeof(code));
@@ -465,7 +462,7 @@ int loadPCode(const char *filename) {
     return 0;
 }
 
-void optimizeCode(void) {
+void optimizeCode() {
     for (int i = 0; i < cx - 2; i++) {
         if (code[i].op == LIT && code[i+1].op == LIT && code[i+2].op == OPR) {
             double val1 = code[i].a;
@@ -541,7 +538,7 @@ int base(int l, int b) {
     return bl;
 }
 
-void interpret(void) {
+void interpret() {
     int p = 0; // Program counter
     int b = 1; // Base pointer
     int t = 0; // Top of stack
@@ -566,11 +563,15 @@ void interpret(void) {
 
             case OPR:
                 switch ((int)i.a) {
-                    case 0: // return
-                        t = b - 1;
-                        p = stackIndexFromValue(stack[t + 3], "invalid return address");
-                        b = stackIndexFromValue(stack[t + 2], "invalid dynamic link");
+                    case 0: { // return
+                        int paramSlots = i.l;
+                        int retAddr = stackIndexFromValue(stack[b + 2], "invalid return address");
+                        int dynLink = stackIndexFromValue(stack[b + 1], "invalid dynamic link");
+                        t = b - paramSlots - 1;
+                        p = retAddr;
+                        b = dynLink;
                         break;
+                    }
                     case 1: // negate
                         stack[t] = -stack[t];
                         break;
@@ -857,9 +858,12 @@ void interpret(void) {
                         lastReturnDims[d] = 0;
                     }
                 }
-                t = b - 1;
-                p = stackIndexFromValue(stack[t + 3], "invalid return address");
-                b = stackIndexFromValue(stack[t + 2], "invalid dynamic link");
+                int paramSlots = (int)i.l;
+                int retAddr = stackIndexFromValue(stack[b + 2], "invalid return address");
+                int dynLink = stackIndexFromValue(stack[b + 1], "invalid dynamic link");
+                t = b - paramSlots - 1;
+                p = retAddr;
+                b = dynLink;
                 t++;
                 stack[t] = retValue;
                 break;

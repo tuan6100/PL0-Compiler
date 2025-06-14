@@ -7,14 +7,13 @@ static SymbolTable symbolTable;
 static int currentLevel = 0;
 static int globalRootVarCount = 0;
 
-void initSymbolTable(void) {
+void initSymbolTable() {
     symbolTable.count = 0;
     globalRootVarCount = 0;
     currentLevel = 0;
 }
 
 void enterObject(char *name, ObjectType type, double value, int size, int isString, int isStatic) {
-    // Check if the identifier is already declared in the current scope
     int startIdx = (currentLevel > 0) ? symbolTable.prev_count[currentLevel - 1] : 0;
     for (int i = startIdx; i < symbolTable.count; i++) {
         if (strcmp(symbolTable.symbols[i].name, name) == 0) {
@@ -44,6 +43,7 @@ void enterObject(char *name, ObjectType type, double value, int size, int isStri
     obj->isString = (type == OBJ_VARIABLE || type == OBJ_PARAMETER) ? isString : 0;
     obj->isRefParam = 0;
     obj->paramCount = 0;
+    obj->totalParamSlots = 0;
     obj->hasReturnValue = 0;
     obj->returnDimCount = 0;
     obj->isImmutable = 0;
@@ -68,7 +68,6 @@ void enterObject(char *name, ObjectType type, double value, int size, int isStri
             obj->address = 3 + globalRootVarCount;
             globalRootVarCount += obj->size;
         } else {
-            // Compute local scope stack offset excluding static variables.
             int varCount = 0;
             int sIdx = (currentLevel > 0) ? symbolTable.prev_count[currentLevel - 1] : 0;
             for (int j = sIdx; j < symbolTable.count - 1; j++) {
@@ -85,7 +84,7 @@ void enter(char *name, ObjectType type, double value, int size, int isString) {
     enterObject(name, type, value, size, isString, 0);
 }
 
-int getVarCount(void) {
+int getVarCount() {
     if (currentLevel <= 1) {
         return globalRootVarCount;
     }
@@ -99,12 +98,11 @@ int getVarCount(void) {
     return varCount;
 }
 
-int getCurrentLevel(void) {
+int getCurrentLevel() {
     return currentLevel;
 }
 
 Object* lookup(char *name) {
-    // Search from inner scope to outer scope
     for (int i = symbolTable.count - 1; i >= 0; i--) {
         if (strcmp(symbolTable.symbols[i].name, name) == 0) {
             return &symbolTable.symbols[i];
@@ -113,14 +111,14 @@ Object* lookup(char *name) {
     return NULL;
 }
 
-void enterBlock(void) {
+void enterBlock() {
     if (currentLevel >= MAX_NESTING_LEVEL) {
         error("too many nested blocks");
     }
     symbolTable.prev_count[currentLevel++] = symbolTable.count;
 }
 
-void exitBlock(void) {
+void exitBlock() {
     if (currentLevel > 0) {
         symbolTable.count = symbolTable.prev_count[--currentLevel];
     } else {

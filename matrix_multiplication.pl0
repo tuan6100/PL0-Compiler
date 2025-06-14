@@ -1,7 +1,7 @@
 PROGRAM MatrixMultiplication;
 
 
-PROCEDURE MULTIPLY(A[][], B[][]);
+FUNCTION MULTIPLY(A[][], B[][]);
 CONST ROWSA = SIZEOF(A) / SIZEOF(A[0]),
       COLSA = SIZEOF(A[0]),
       ROWSB = SIZEOF(B) / SIZEOF(B[0]),

@@ -53,11 +53,11 @@ typedef enum {
 void emit(OpCode op, int l, double a);
 const char *getOpCodeName(OpCode op);
 OpCode getOpCodeByName(const char *name);
-void listCode(void);
-void optimizeCode(void);
-void interpret(void);
+void listCode();
+void optimizeCode();
+void interpret();
 int addStringLiteral(const char *literal);
-void resetCodeGen(void);
+void resetCodeGen();
 int savePCodeBinary(const char *filename);
 int savePCodeText(const char *filename);
 int savePCode(const char *filename, PCodeFormat format);
