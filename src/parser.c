@@ -2669,7 +2669,7 @@ void block(void) {
     exitBlock();
 }
 
-void program(void) {
+void parseProgram(void) {
     hasLookahead = 0;
     initSymbolTable();
     cx = 0;
@@ -2679,9 +2679,9 @@ void program(void) {
         if (token != TK_IDENT) {
             error("program: expected program name");
         }
+        nextToken();
+        expect(SB_SEMICOLON);
     }
-    nextToken();
-    expect(SB_SEMICOLON);
     block();
     if (token == SB_PERIOD) {
         nextToken();
@@ -2690,7 +2690,10 @@ void program(void) {
         error("program: unexpected token after '.'");
     }
     optimizeCode();
-    // listCode();
+}
+
+void program(void) {
+    parseProgram();
     interpret();
 }
 

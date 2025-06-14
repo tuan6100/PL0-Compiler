@@ -40,6 +40,7 @@ extern char StringLiteral[MAX_STRING_LEN + 1];
 
 TokenType getToken();
 
+int compileSource(const char *filename);
 void compile(char *filename);
 
 #endif

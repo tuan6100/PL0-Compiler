@@ -1,4 +1,7 @@
 #include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <ctype.h>
 #include <string.h>
 #include <math.h>
 #include "codegen.h"
@@ -125,41 +128,341 @@ void emit(OpCode op, int l, double a) {
     cx++;
 }
 
+static const char *opNames[] = {
+    "LIT", "OPR", "LOD", "STO", "CAL", "INT", "JMP", "JPC",
+    "LDA", "LDI", "STI", "RDI", "WRI", "WRS", "WRL", "STS",
+    "WNL", "SCLR", "CATL", "CATV", "CATI", "DUP", "ALC",
+    "RETV", "LEN", "POP", "LRD", "CHK", "WRA", "CATA"
+};
+#define OP_COUNT ((int)(sizeof(opNames) / sizeof(opNames[0])))
+
+const char *getOpCodeName(OpCode op) {
+    if ((int)op >= 0 && (int)op < OP_COUNT) {
+        return opNames[op];
+    }
+    return "UNKNOWN";
+}
+
+OpCode getOpCodeByName(const char *name) {
+    for (int i = 0; i < OP_COUNT; i++) {
+        if (strcmp(name, opNames[i]) == 0) {
+            return (OpCode)i;
+        }
+    }
+    if (strcmp(name, "SCL") == 0) return SCLR;
+    if (strcmp(name, "CTL") == 0) return CATL;
+    if (strcmp(name, "CTV") == 0) return CATV;
+    if (strcmp(name, "CTI") == 0) return CATI;
+    if (strcmp(name, "CTA") == 0) return CATA;
+    if (strcmp(name, "RTV") == 0) return RETV;
+    return (OpCode)-1;
+}
+
 void listCode(void) {
     printf("--- Code Generation ---\n");
-    for (int i = 0; i < cx; i++) {
-        printf("%3d %-3s %d %g\n", i,
-            code[i].op == LIT ? "LIT" :
-                code[i].op == OPR ? "OPR" :
-                code[i].op == LOD ? "LOD" :
-                code[i].op == STO ? "STO" :
-                code[i].op == CAL ? "CAL" :
-                code[i].op == INT ? "INT" :
-                code[i].op == JMP ? "JMP" :
-                code[i].op == JPC ? "JPC" :
-                code[i].op == LDA ? "LDA" :
-                code[i].op == LDI ? "LDI" :
-                code[i].op == STI ? "STI" :
-                code[i].op == RDI ? "RDI" :
-                code[i].op == WRI ? "WRI" :
-                code[i].op == WRS ? "WRS" :
-                code[i].op == WRL ? "WRL" :
-                code[i].op == STS ? "STS" :
-                code[i].op == WNL ? "WNL" :
-                code[i].op == SCLR ? "SCL" :
-                code[i].op == CATL ? "CTL" :
-                code[i].op == CATV ? "CTV" :
-                code[i].op == CATI ? "CTI" :
-                code[i].op == DUP ? "DUP" :
-                code[i].op == ALC ? "ALC" :
-                code[i].op == RETV ? "RTV" :
-                code[i].op == LEN ? "LEN" :
-                code[i].op == POP ? "POP" :
-                code[i].op == LRD ? "LRD" :
-                code[i].op == CHK ? "CHK" :
-                code[i].op == WRA ? "WRA" : "CTA",
-            code[i].l, code[i].a);
+    if (stringLiteralCount > 0) {
+        printf("--- String Pool (%d entries) ---\n", stringLiteralCount);
+        for (int i = 0; i < stringLiteralCount; i++) {
+            printf("[%2d] \"%s\"\n", i, stringLiterals[i]);
+        }
+        printf("--------------------------------\n");
     }
+    for (int i = 0; i < cx; i++) {
+        printf("%3d %-4s %2d %g\n", i, getOpCodeName(code[i].op), code[i].l, code[i].a);
+    }
+}
+
+void resetCodeGen(void) {
+    cx = 0;
+    stringLiteralCount = 0;
+    memset(code, 0, sizeof(code));
+    memset(stringLiterals, 0, sizeof(stringLiterals));
+    memset(stack, 0, sizeof(stack));
+    memset(allocLenAt, 0, sizeof(allocLenAt));
+    memset(lastReturnDims, 0, sizeof(lastReturnDims));
+    lastReturnDimCount = 0;
+    lastReturnBaseAddr = -1;
+}
+
+static void writeEscapedString(FILE *fp, const char *s) {
+    fputc('"', fp);
+    for (int i = 0; s[i] != '\0'; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c == '"') {
+            fputs("\\\"", fp);
+        } else if (c == '\\') {
+            fputs("\\\\", fp);
+        } else if (c == '\n') {
+            fputs("\\n", fp);
+        } else if (c == '\r') {
+            fputs("\\r", fp);
+        } else if (c == '\t') {
+            fputs("\\t", fp);
+        } else if (c < 32 || c >= 127) {
+            fprintf(fp, "\\x%02X", c);
+        } else {
+            fputc(c, fp);
+        }
+    }
+    fputc('"', fp);
+}
+
+static int readEscapedString(FILE *fp, char *dst, size_t maxLen) {
+    int ch = fgetc(fp);
+    while (ch == ' ' || ch == '\t') ch = fgetc(fp);
+    if (ch != '"') return 0;
+    size_t len = 0;
+    while ((ch = fgetc(fp)) != EOF && ch != '"' && ch != '\n' && ch != '\r') {
+        if (ch == '\\') {
+            int next = fgetc(fp);
+            if (next == 'n') ch = '\n';
+            else if (next == 'r') ch = '\r';
+            else if (next == 't') ch = '\t';
+            else if (next == '"') ch = '"';
+            else if (next == '\\') ch = '\\';
+            else if (next == 'x') {
+                int h1 = fgetc(fp);
+                int h2 = fgetc(fp);
+                char hex[3] = {(char)h1, (char)h2, '\0'};
+                ch = (int)strtol(hex, NULL, 16);
+            } else {
+                ch = next;
+            }
+        }
+        if (len + 1 < maxLen) {
+            dst[len++] = (char)ch;
+        }
+    }
+    dst[len] = '\0';
+    return (ch == '"');
+}
+
+#define PCODE_BIN_MAGIC "PL0B"
+#define PCODE_BIN_VERSION 1
+#define PCODE_TXT_MAGIC "PL0_PCODE_TEXT v1"
+
+int savePCodeBinary(const char *filename) {
+    FILE *fp = fopen(filename, "wb");
+    if (!fp) {
+        fprintf(stderr, "Error: cannot open file %s for writing\n", filename);
+        return -1;
+    }
+    if (fwrite(PCODE_BIN_MAGIC, 1, 4, fp) != 4) { fclose(fp); return -1; }
+    uint8_t version = PCODE_BIN_VERSION;
+    uint8_t flags = 0;
+    fwrite(&version, 1, 1, fp);
+    fwrite(&flags, 1, 1, fp);
+
+    uint32_t strCount = (uint32_t)stringLiteralCount;
+    fwrite(&strCount, sizeof(uint32_t), 1, fp);
+    for (int i = 0; i < stringLiteralCount; i++) {
+        uint32_t len = (uint32_t)strlen(stringLiterals[i]);
+        fwrite(&len, sizeof(uint32_t), 1, fp);
+        if (len > 0) {
+            fwrite(stringLiterals[i], 1, len, fp);
+        }
+    }
+
+    uint32_t codeCount = (uint32_t)cx;
+    fwrite(&codeCount, sizeof(uint32_t), 1, fp);
+    for (int i = 0; i < cx; i++) {
+        uint8_t op = (uint8_t)code[i].op;
+        int32_t l = (int32_t)code[i].l;
+        double a = code[i].a;
+        fwrite(&op, 1, 1, fp);
+        fwrite(&l, sizeof(int32_t), 1, fp);
+        fwrite(&a, sizeof(double), 1, fp);
+    }
+
+    fclose(fp);
+    return 0;
+}
+
+int savePCodeText(const char *filename) {
+    FILE *fp = fopen(filename, "w");
+    if (!fp) {
+        fprintf(stderr, "Error: cannot open file %s for writing\n", filename);
+        return -1;
+    }
+    fprintf(fp, "%s\n\n", PCODE_TXT_MAGIC);
+
+    fprintf(fp, "STRINGS %d\n", stringLiteralCount);
+    for (int i = 0; i < stringLiteralCount; i++) {
+        fprintf(fp, "%d ", i);
+        writeEscapedString(fp, stringLiterals[i]);
+        fprintf(fp, "\n");
+    }
+    fprintf(fp, "\n");
+
+    fprintf(fp, "CODE %d\n", cx);
+    for (int i = 0; i < cx; i++) {
+        fprintf(fp, "%d %s %d %.*g\n", i, getOpCodeName(code[i].op), code[i].l, 17, code[i].a);
+    }
+
+    fclose(fp);
+    return 0;
+}
+
+int savePCode(const char *filename, PCodeFormat format) {
+    if (format == PCODE_FMT_TEXT) {
+        return savePCodeText(filename);
+    }
+    return savePCodeBinary(filename);
+}
+
+int loadPCode(const char *filename) {
+    FILE *fp = fopen(filename, "rb");
+    if (!fp) {
+        fprintf(stderr, "Error: cannot open pcode file %s for reading\n", filename);
+        return -1;
+    }
+
+    char magic[16];
+    memset(magic, 0, sizeof(magic));
+    size_t nread = fread(magic, 1, 4, fp);
+    if (nread < 4) {
+        fprintf(stderr, "Error: %s is not a valid P-Code file (too short)\n", filename);
+        fclose(fp);
+        return -1;
+    }
+
+    resetCodeGen();
+
+    if (memcmp(magic, PCODE_BIN_MAGIC, 4) == 0) {
+        uint8_t version = 0, flags = 0;
+        if (fread(&version, 1, 1, fp) != 1 || fread(&flags, 1, 1, fp) != 1) {
+            fprintf(stderr, "Error: corrupted binary header in %s\n", filename);
+            fclose(fp);
+            return -1;
+        }
+        if (version != PCODE_BIN_VERSION) {
+            fprintf(stderr, "Error: unsupported binary P-Code version %d in %s\n", version, filename);
+            fclose(fp);
+            return -1;
+        }
+        uint32_t strCount = 0;
+        if (fread(&strCount, sizeof(uint32_t), 1, fp) != 1 || strCount > MAX_STRING_LITERALS) {
+            fprintf(stderr, "Error: invalid string count in %s\n", filename);
+            fclose(fp);
+            return -1;
+        }
+        stringLiteralCount = (int)strCount;
+        for (int i = 0; i < stringLiteralCount; i++) {
+            uint32_t len = 0;
+            if (fread(&len, sizeof(uint32_t), 1, fp) != 1 || len > MAX_STRING_LEN) {
+                fprintf(stderr, "Error: invalid string length in %s\n", filename);
+                fclose(fp);
+                return -1;
+            }
+            if (len > 0) {
+                if (fread(stringLiterals[i], 1, len, fp) != len) {
+                    fprintf(stderr, "Error: failed reading string data in %s\n", filename);
+                    fclose(fp);
+                    return -1;
+                }
+            }
+            stringLiterals[i][len] = '\0';
+        }
+
+        uint32_t codeCount = 0;
+        if (fread(&codeCount, sizeof(uint32_t), 1, fp) != 1 || codeCount > MAX_CODE_SIZE) {
+            fprintf(stderr, "Error: invalid instruction count in %s\n", filename);
+            fclose(fp);
+            return -1;
+        }
+        cx = (int)codeCount;
+        for (int i = 0; i < cx; i++) {
+            uint8_t op = 0;
+            int32_t l = 0;
+            double a = 0;
+            if (fread(&op, 1, 1, fp) != 1 ||
+                fread(&l, sizeof(int32_t), 1, fp) != 1 ||
+                fread(&a, sizeof(double), 1, fp) != 1) {
+                fprintf(stderr, "Error: failed reading instruction %d in %s\n", i, filename);
+                fclose(fp);
+                return -1;
+            }
+            code[i].op = (OpCode)op;
+            code[i].l = (int)l;
+            code[i].a = a;
+        }
+        fclose(fp);
+        return 0;
+    }
+
+    rewind(fp);
+    char line[512];
+    if (!fgets(line, sizeof(line), fp)) {
+        fprintf(stderr, "Error: empty P-Code file %s\n", filename);
+        fclose(fp);
+        return -1;
+    }
+    char *p = line + strlen(line) - 1;
+    while (p >= line && (*p == '\r' || *p == '\n' || *p == ' ' || *p == '\t')) {
+        *p = '\0';
+        p--;
+    }
+    if (strncmp(line, "PL0_PCODE_TEXT", 14) != 0 && strncmp(line, "# PL0", 5) != 0) {
+        fprintf(stderr, "Error: %s is not a recognized PL/0 P-Code format\n", filename);
+        fclose(fp);
+        return -1;
+    }
+
+    while (fgets(line, sizeof(line), fp)) {
+        char *s = line;
+        while (*s == ' ' || *s == '\t') s++;
+        if (*s == '#' || *s == '\r' || *s == '\n' || *s == '\0') continue;
+
+        if (strncmp(s, "STRINGS", 7) == 0) {
+            int strCount = 0;
+            if (sscanf(s + 7, "%d", &strCount) == 1) {
+                for (int i = 0; i < strCount && i < MAX_STRING_LITERALS; i++) {
+                    int idx = 0;
+                    if (fscanf(fp, "%d", &idx) != 1) break;
+                    char strBuf[MAX_STRING_LEN + 1];
+                    if (!readEscapedString(fp, strBuf, sizeof(strBuf))) {
+                        fprintf(stderr, "Error: malformed string literal %d in %s\n", idx, filename);
+                        fclose(fp);
+                        return -1;
+                    }
+                    if (idx >= 0 && idx < MAX_STRING_LITERALS) {
+                        snprintf(stringLiterals[idx], sizeof(stringLiterals[idx]), "%s", strBuf);
+                        if (idx >= stringLiteralCount) {
+                            stringLiteralCount = idx + 1;
+                        }
+                    }
+                }
+            }
+        } else if (strncmp(s, "CODE", 4) == 0) {
+            int codeCount = 0;
+            if (sscanf(s + 4, "%d", &codeCount) == 1) {
+                for (int i = 0; i < codeCount && i < MAX_CODE_SIZE; i++) {
+                    int idx = 0;
+                    char opStr[32];
+                    int l = 0;
+                    double a = 0;
+                    if (fscanf(fp, "%d %31s %d %lf", &idx, opStr, &l, &a) != 4) {
+                        fprintf(stderr, "Error: malformed instruction line at index %d in %s\n", i, filename);
+                        fclose(fp);
+                        return -1;
+                    }
+                    OpCode op = getOpCodeByName(opStr);
+                    if ((int)op < 0) {
+                        fprintf(stderr, "Error: unknown opcode '%s' in %s\n", opStr, filename);
+                        fclose(fp);
+                        return -1;
+                    }
+                    code[i].op = op;
+                    code[i].l = l;
+                    code[i].a = a;
+                    cx = i + 1;
+                }
+            }
+        }
+    }
+
+    fclose(fp);
+    return 0;
 }
 
 void optimizeCode(void) {
@@ -242,6 +545,12 @@ void interpret(void) {
     int p = 0; // Program counter
     int b = 1; // Base pointer
     int t = 0; // Top of stack
+
+    memset(stack, 0, sizeof(stack));
+    memset(allocLenAt, 0, sizeof(allocLenAt));
+    memset(lastReturnDims, 0, sizeof(lastReturnDims));
+    lastReturnDimCount = 0;
+    lastReturnBaseAddr = -1;
 
     stack[1] = 0; // Static link
     stack[2] = 0; // Dynamic link

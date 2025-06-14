@@ -45,10 +45,22 @@ typedef struct {
 extern Instruction code[MAX_CODE_SIZE];
 extern int cx; // Code index
 
+typedef enum {
+    PCODE_FMT_BINARY,
+    PCODE_FMT_TEXT
+} PCodeFormat;
+
 void emit(OpCode op, int l, double a);
+const char *getOpCodeName(OpCode op);
+OpCode getOpCodeByName(const char *name);
 void listCode(void);
 void optimizeCode(void);
 void interpret(void);
 int addStringLiteral(const char *literal);
+void resetCodeGen(void);
+int savePCodeBinary(const char *filename);
+int savePCodeText(const char *filename);
+int savePCode(const char *filename, PCodeFormat format);
+int loadPCode(const char *filename);
 
 #endif

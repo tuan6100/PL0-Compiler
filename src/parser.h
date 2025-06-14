@@ -17,6 +17,8 @@ void statement();
 
 void block();
 
+void parseProgram();
+
 void program();
 
 #endif
