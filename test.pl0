@@ -1,5 +1,6 @@
 BEGIN PROGRAM
 Var a, b, c;
 a := 10
-b := 10000000000
-c := 10
+b := 20
+c := a + b
+Var d := 10000000000000

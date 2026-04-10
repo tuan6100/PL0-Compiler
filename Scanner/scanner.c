@@ -71,17 +71,20 @@ TokenType getToken() {
 		case '*': ch = getCh(); return SB_TIMES;
 		case '/': ch = getCh(); return SB_SLASH;
 		case '=': ch = getCh(); return SB_EQU;
-		case '#': ch = getCh(); return SB_NEQ;
 		case '<':
 			ch = getCh();
-			if(ch == '='){
+			if (ch == '=') {
 				ch = getCh();
 				return SB_LEQ;
+			}
+			if (ch == '>') {
+				ch = getCh();
+				return SB_NEQ;
 			}
 			return SB_LSS;
 		case '>':
 			ch = getCh();
-			if(ch == '='){
+			if (ch == '=') {
 				ch = getCh();
 				return SB_GEQ;
 			}

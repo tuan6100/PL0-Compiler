@@ -1,0 +1,16 @@
+PROGRAM EXAMPLE2;
+VAR a, b, c;
+PROCEDURE GCD;
+    VAR TEMP;
+    BEGIN
+        WHILE A <> B DO
+            IF A > B THEN A := A - B
+            ELSE B := B - A;
+        C := B
+    END;
+BEGIN
+    A := 10;
+    B := 6;
+    CALL GCD;
+    C := C
+END.
