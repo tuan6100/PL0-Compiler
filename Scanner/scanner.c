@@ -3,6 +3,36 @@
 #include <ctype.h>
 #include "scanner.h"
 
+#include "parser.h"
+
+const Keyword keywords[KEYWORDS_COUNT] = {
+	{"BEGIN", KW_BEGIN},
+	{"CALL", KW_CALL},
+	{"CONST", KW_CONST},
+	{"DO", KW_DO},
+  {"ELSE", KW_ELSE},
+	{"END", KW_END},
+  {"FOR", KW_FOR},
+	 {"IF", KW_IF},
+   {"ODD",KW_ODD},
+	{"PROCEDURE", KW_PROCEDURE},
+  {"PROGRAM", KW_PROGRAM},
+  {"THEN", KW_THEN},
+  {"TO", KW_TO},
+  {"VAR", KW_VAR},
+	{"WHILE", KW_WHILE}
+};
+
+const char TabToken[][11] = {	"NONE", "IDENT", "NUMBER",
+		"BEGIN", "CALL", "CONST", "DO",  "ELSE", "END", "FOR", "IF",
+		"ODD", "PROCEDURE", "PROGRAM", "THEN", "TO", "VAR", "WHILE",
+
+		"PLUS", "MINUS", "TIMES", "SLASH", "EQU", "NEQ", "LSS",
+		"LEQ", "GTR", "GEQ", "PERCENT", "LPARENT", "RPARENT",
+		"LBRACK", "RBRACK", "PERIOD", "COMMA", "SEMICOLON", "ASSIGN"
+	};
+
+
 TokenType Token;
 int		  Num;
 char	  Id[MAX_IDENT_LEN + 1];
@@ -56,8 +86,8 @@ TokenType getToken() {
 			printf(" Number is too large\n");
 			return TK_NONE;
 		}
-		return TK_NUMBER;		//chu y canh bao: so qua lon
-	} else if (ch == ':') {   //doan nhan tu vung :=
+		return TK_NUMBER;
+	} else if (ch == ':') {
 		ch = getCh();
 		if(ch == '='){
 			ch = getCh();
@@ -71,17 +101,19 @@ TokenType getToken() {
 		case '*': ch = getCh(); return SB_TIMES;
 		case '/': ch = getCh(); return SB_SLASH;
 		case '=': ch = getCh(); return SB_EQU;
-		case '#': ch = getCh(); return SB_NEQ;
 		case '<':
 			ch = getCh();
-			if(ch == '='){
+			if (ch == '=') {
 				ch = getCh();
 				return SB_LEQ;
+			} else if (ch == '>') {
+				ch = getCh();
+				return SB_NEQ;
 			}
 			return SB_LSS;
 		case '>':
 			ch = getCh();
-			if(ch == '='){
+			if (ch == '=') {
 				ch = getCh();
 				return SB_GEQ;
 			}
@@ -108,12 +140,7 @@ void compile(char * filename) {
 		return;
 	}
 	ch = ' ';
-	do {
-		Token = getToken();
-		printf(" %s", TabToken[Token]);
-		if(Token == TK_IDENT) printf("(%s) \n", Id);
-		else if(Token == TK_NUMBER) printf("(%d) \n", Num);
-		else printf("\n");
-	} while(Token != TK_NONE);
+	nextToken();
+	program();
 	fclose(f);
 }
