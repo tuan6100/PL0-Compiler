@@ -63,13 +63,15 @@ TokenType getToken() {
 	if (ch == EOF) {
 		return TK_NONE;
 	}
-	if(isalpha(ch)) {		//bat dau la mot chu cai
+	if(isalpha(ch) || ch == '_') {		//bat dau la mot chu cai hoac dau gach duoi
 		Id[0] = ch;
 		int i = 0;
 		ch = getCh();
-		while(isalpha(ch) || isdigit(ch)) {
-			i++;
-			Id[i] = ch;
+		while(isalpha(ch) || isdigit(ch) || ch == '_') {
+			if (i < MAX_IDENT_LEN - 1) {
+				i++;
+				Id[i] = ch;
+			}
 			ch = getCh();
 		}
 		Id[i+1] = '\0';
