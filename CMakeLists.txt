@@ -8,5 +8,5 @@ file(GLOB SRCS "*.c" "**/*.c")
 add_executable(pl0 ${SRCS})
 
 set_target_properties(pl0  PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/target"
 )
