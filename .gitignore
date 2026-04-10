@@ -4,3 +4,4 @@ target/
 .idea/
 pl0*
 *.pl0
+*.o
