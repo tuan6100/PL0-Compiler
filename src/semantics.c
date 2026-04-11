@@ -38,6 +38,7 @@ void enter(char *name, ObjectType type, int value, int size, int isString) {
     obj->isString = (type == OBJ_VARIABLE || type == OBJ_PARAMETER) ? isString : 0;
     obj->isRefParam = 0;
     obj->paramCount = 0;
+    obj->hasReturnValue = 0;
     for (int k = 0; k < MAX_PROC_PARAMS; k++) {
         obj->paramIsRef[k] = 0;
         obj->paramSize[k] = 0;

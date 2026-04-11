@@ -26,6 +26,7 @@ typedef struct {
     int paramCount; // Procedure parameter count
     int paramIsRef[MAX_PROC_PARAMS]; // Procedure parameter passing mode
     int paramSize[MAX_PROC_PARAMS]; // Formal parameter size (1 for scalar, >1 for array)
+    int hasReturnValue; // 1 if procedure contains RETURN with a value
 } Object;
 
 #define MAX_SYMBOL_TABLE_SIZE 100

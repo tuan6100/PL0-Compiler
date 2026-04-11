@@ -22,7 +22,9 @@ typedef enum {
     SCLR, // Clear zero-terminated string at address on top of stack
     CATL, // Append interned string literal to destination address on top of stack
     CATV, // Append source string address (top) to destination (below top)
-    CATI  // Append integer value (top) to destination (below top)
+    CATI, // Append integer value (top) to destination (below top)
+    RETV, // Return from procedure with value on top of stack
+    LEN   // Compute string length from address on top of stack
 } OpCode;
 
 typedef struct {

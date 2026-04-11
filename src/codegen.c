@@ -88,7 +88,9 @@ void listCode(void) {
                 code[i].op == WNL ? "WNL" :
                 code[i].op == SCLR ? "SCL" :
                 code[i].op == CATL ? "CTL" :
-                code[i].op == CATV ? "CTV" : "CTI",
+                code[i].op == CATV ? "CTV" :
+                code[i].op == CATI ? "CTI" :
+                code[i].op == RETV ? "RTV" : "LEN",
             code[i].l, code[i].a);
     }
 }
@@ -256,6 +258,27 @@ void interpret(void) {
                 char temp[32];
                 sprintf(temp, "%d", value);
                 appendToStringAt(dstAddr, temp);
+                break;
+            }
+            case RETV: {
+                int retValue = stack[t--];
+                t = b - 1;
+                p = stack[t + 3];
+                b = stack[t + 2];
+                t++;
+                stack[t] = retValue;
+                break;
+            }
+            case LEN: {
+                int addr = stack[t];
+                if (addr < 0 || addr >= STACK_SIZE) {
+                    error("LEN address out of bounds");
+                }
+                int len = 0;
+                while (addr + len < STACK_SIZE && stack[addr + len] != 0) {
+                    len++;
+                }
+                stack[t] = len;
                 break;
             }
             case CAL:

@@ -18,11 +18,14 @@ static int pendingParamIsRef[MAX_PROC_PARAMS];
 static int pendingParamSize[MAX_PROC_PARAMS];
 static char pendingParamName[MAX_PROC_PARAMS][MAX_IDENT_LEN + 1];
 static int pendingParamLevel = -1;
+static Object *currentProcedure = NULL;
 
 static const char *interpExprPtr;
 
 static int tokenStartsStringValueExpr(void);
 static void emitAppendStringTerm(const Object *target);
+static void emitSizeOfObjectValue(const Object *obj);
+static void parseProcedureCallArguments(const Object *proc);
 
 // ─── Tiện ích ────────────────────────────────────────────────────────────────
 
@@ -81,21 +84,102 @@ static void emitStoreObjectValue(const Object *obj) {
     }
 }
 
-static int sizeofObject(const Object *obj) {
+static void emitSizeOfObjectValue(const Object *obj) {
     if (obj == NULL) {
         error("SIZEOF: invalid symbol");
     }
     if (obj->type == OBJ_CONSTANT) {
         if (obj->constIsString) {
-            return (int)strlen(obj->constString);
+            emit(LIT, 0, (int)strlen(obj->constString));
+        } else {
+            emit(LIT, 0, 1);
         }
-        return 1;
+        return;
     }
     if (obj->type == OBJ_VARIABLE || obj->type == OBJ_PARAMETER) {
-        return (obj->size > 0) ? obj->size : 1;
+        if (obj->isString) {
+            emitLoadObjectAddress(obj);
+            emit(LEN, 0, 0);
+        } else if (obj->size > 1) {
+            // Logical array length convention: first cell stores length.
+            emitLoadObjectAddress(obj);
+            emit(LDI, 0, 0);
+        } else {
+            emit(LIT, 0, 1);
+        }
+        return;
     }
     error("SIZEOF: procedure is not supported");
-    return 0;
+}
+
+static void parseProcedureCallArguments(const Object *proc) {
+    int argCount = 0;
+    if (Token == SB_LPARENT) {
+        nextToken();
+        if (Token != SB_RPARENT) {
+            while (1) {
+                if (argCount >= proc->paramCount) {
+                    error("Too many arguments in CALL");
+                }
+                if (proc->paramIsRef[argCount]) {
+                    if (Token != TK_IDENT) {
+                        error("VAR parameter requires an identifier argument");
+                    }
+                    Object *arg = lookup(Id);
+                    if (arg == NULL || !isAssignableObject(arg) || arg->isString) {
+                        error("VAR parameter requires variable argument");
+                    }
+                    if (proc->paramSize[argCount] > 1) {
+                        if (arg->size <= 1) {
+                            error("Array parameter requires array argument");
+                        }
+                    } else {
+                        if (arg->size != 1) {
+                            error("Scalar VAR parameter requires scalar argument");
+                        }
+                    }
+                    if (arg->isRefParam) {
+                        emit(LOD, getCurrentLevel() - arg->level, arg->address);
+                    } else {
+                        emit(LDA, getCurrentLevel() - arg->level, arg->address);
+                    }
+                    nextToken();
+                } else {
+                    if (proc->paramSize[argCount] > 1) {
+                        error("Array parameter must be passed by VAR/reference");
+                    }
+                    if (Token == TK_STRING) {
+                        emit(LIT, 0, addStringLiteral(StringLiteral));
+                        nextToken();
+                    } else if (Token == TK_IDENT) {
+                        Object *argObj = lookup(Id);
+                        if (argObj != NULL && argObj->type == OBJ_CONSTANT && argObj->constIsString) {
+                            emit(LIT, 0, addStringLiteral(argObj->constString));
+                            nextToken();
+                        } else if (argObj != NULL && (argObj->type == OBJ_VARIABLE || argObj->type == OBJ_PARAMETER) && argObj->isString) {
+                            emitLoadObjectAddress(argObj);
+                            nextToken();
+                        } else {
+                            expression();
+                        }
+                    } else {
+                        expression();
+                    }
+                }
+                argCount++;
+                if (Token == SB_COMMA) {
+                    nextToken();
+                    continue;
+                }
+                break;
+            }
+        }
+        expect(SB_RPARENT);
+    }
+
+    if (argCount != proc->paramCount) {
+        error("Argument count mismatch in CALL");
+    }
 }
 
 static void interpSkipSpaces(void) {
@@ -177,7 +261,7 @@ static void interpParseFactor(void) {
                 sprintf(msg, "interpolation: SIZEOF undeclared identifier %s", targetName);
                 error(msg);
             }
-            emit(LIT, 0, sizeofObject(targetObj));
+            emitSizeOfObjectValue(targetObj);
             return;
         }
 
@@ -432,10 +516,9 @@ void factor(void) {
                 sprintf(msg, "SIZEOF: undeclared identifier %s", Id);
                 error(msg);
             }
-            int s = sizeofObject(obj);
             nextToken();
             expect(SB_RPARENT);
-            emit(LIT, 0, s);
+            emitSizeOfObjectValue(obj);
             return;
         }
 
@@ -446,7 +529,13 @@ void factor(void) {
             error(msg);
         }
         if (obj->type == OBJ_PROCEDURE) {
-            error("Cannot use procedure in expression");
+            nextToken();
+            parseProcedureCallArguments(obj);
+            if (!obj->hasReturnValue) {
+                error("Procedure does not return a value");
+            }
+            emit(CAL, getCurrentLevel() - obj->level, obj->address);
+            return;
         }
         if (obj->type == OBJ_CONSTANT) {
             if (obj->constIsString) {
@@ -771,77 +860,23 @@ void statement(void) {
                 error("Cannot CALL a non-procedure");
             }
             nextToken();
-
-            int argCount = 0;
-            if (Token == SB_LPARENT) {
-                nextToken();
-                if (Token != SB_RPARENT) {
-                    while (1) {
-                        if (argCount >= proc->paramCount) {
-                            error("Too many arguments in CALL");
-                        }
-                        if (proc->paramIsRef[argCount]) {
-                            if (Token != TK_IDENT) {
-                                error("VAR parameter requires an identifier argument");
-                            }
-                            Object *arg = lookup(Id);
-                            if (arg == NULL || !isAssignableObject(arg) || arg->isString) {
-                                error("VAR parameter requires variable argument");
-                            }
-                            if (proc->paramSize[argCount] > 1) {
-                                if (arg->size <= 1) {
-                                    error("Array parameter requires array argument");
-                                }
-                            } else {
-                                if (arg->size != 1) {
-                                    error("Scalar VAR parameter requires scalar argument");
-                                }
-                            }
-                            if (arg->isRefParam) {
-                                emit(LOD, getCurrentLevel() - arg->level, arg->address);
-                            } else {
-                                emit(LDA, getCurrentLevel() - arg->level, arg->address);
-                            }
-                            nextToken();
-                        } else {
-                            if (proc->paramSize[argCount] > 1) {
-                                error("Array parameter must be passed by VAR/reference");
-                            }
-                            if (Token == TK_STRING) {
-                                emit(LIT, 0, addStringLiteral(StringLiteral));
-                                nextToken();
-                            } else if (Token == TK_IDENT) {
-                                Object *argObj = lookup(Id);
-                                if (argObj != NULL && argObj->type == OBJ_CONSTANT && argObj->constIsString) {
-                                    emit(LIT, 0, addStringLiteral(argObj->constString));
-                                    nextToken();
-                                } else if (argObj != NULL && (argObj->type == OBJ_VARIABLE || argObj->type == OBJ_PARAMETER) && argObj->isString) {
-                                    emitLoadObjectAddress(argObj);
-                                    nextToken();
-                                } else {
-                                    expression();
-                                }
-                            } else {
-                                expression();
-                            }
-                        }
-                        argCount++;
-                        if (Token == SB_COMMA) {
-                            nextToken();
-                            continue;
-                        }
-                        break;
-                    }
-                }
-                expect(SB_RPARENT);
-            }
-
-            if (argCount != proc->paramCount) {
-                error("Argument count mismatch in CALL");
-            }
+            parseProcedureCallArguments(proc);
             emit(CAL, getCurrentLevel() - proc->level, proc->address);
         } else {
             error("CALL: expected procedure name or built-in");
+        }
+
+    } else if (Token == KW_RETURN) {
+        if (currentProcedure == NULL) {
+            error("RETURN is only valid inside a procedure");
+        }
+        nextToken();
+        if (Token == SB_SEMICOLON || Token == KW_END) {
+            emit(OPR, 0, 0);
+        } else {
+            expression();
+            emit(RETV, 0, 0);
+            currentProcedure->hasReturnValue = 1;
         }
 
     } else if (Token == KW_BEGIN) {
@@ -1050,7 +1085,10 @@ void block(void) {
 
         expect(SB_SEMICOLON);
         int procEntry = cx;
+        Object *savedProcedure = currentProcedure;
+        currentProcedure = obj;
         block();
+        currentProcedure = savedProcedure;
         obj->address = procEntry;
         expect(SB_SEMICOLON);
     }
