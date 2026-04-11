@@ -20,6 +20,7 @@ const Keyword keywords[KEYWORDS_COUNT] = {
   {"READ", KW_READ},
   {"READLN", KW_READ},
   {"RETURN", KW_RETURN},
+  {"SIZEOF", KW_SIZEOF},
   {"THEN", KW_THEN},
   {"TO", KW_TO},
   {"VAR", KW_VAR},
@@ -30,7 +31,7 @@ const Keyword keywords[KEYWORDS_COUNT] = {
 
 const char TabToken[][12] = {	"NONE", "IDENT", "NUMBER", "STRING",
 		"BEGIN", "CALL", "CONST", "DO",  "ELSE", "END", "FOR", "IF",
-		"ODD", "PROCEDURE", "PROGRAM", "READ", "RETURN", "THEN", "TO", "VAR", "WHILE", "WRITE", "WRITELN",
+		"ODD", "PROCEDURE", "PROGRAM", "READ", "RETURN", "SIZEOF", "THEN", "TO", "VAR", "WHILE", "WRITE", "WRITELN",
 
 		"PLUS", "MINUS", "TIMES", "SLASH", "EQU", "NEQ", "LSS",
 		"LEQ", "GTR", "GEQ", "PERCENT", "LPARENT", "RPARENT",
@@ -78,7 +79,8 @@ TokenType getToken() {
 		}
 		Id[i+1] = '\0';
 		return checkKeyword(Id);
-	} else if (ch == '"') {
+	}
+	if (ch == '"') {
 		int i = 0;
 		ch = getCh();
 		while (ch != EOF && ch != '"') {
@@ -94,7 +96,8 @@ TokenType getToken() {
 		}
 		ch = getCh();
 		return TK_STRING;
-	} else if( isdigit(ch)) {  //bat dau la mot chu so
+	}
+	if( isdigit(ch)) {  //bat dau la mot chu so
 		Num = 0;
 		int length = 0;
 		while(ch != EOF && isdigit(ch)) {
@@ -107,51 +110,50 @@ TokenType getToken() {
 			return TK_NONE;
 		}
 		return TK_NUMBER;
-	} else if (ch == ':') {
+	}
+	if (ch == ':') {
 		ch = getCh();
 		if(ch == '='){
 			ch = getCh();
 			return SB_ASSIGN;
 		}
 		return TK_NONE;
-	} else {
-		switch(ch){
-		case '+': ch = getCh(); return SB_PLUS;
-		case '-': ch = getCh(); return SB_MINUS;
-		case '*': ch = getCh(); return SB_TIMES;
-		case '/': ch = getCh(); return SB_SLASH;
-		case '=': ch = getCh(); return SB_EQU;
-		case '<':
-			ch = getCh();
-			if (ch == '=') {
-				ch = getCh();
-				return SB_LEQ;
-			} else if (ch == '>') {
-				ch = getCh();
-				return SB_NEQ;
-			}
-			return SB_LSS;
-		case '>':
-			ch = getCh();
-			if (ch == '=') {
-				ch = getCh();
-				return SB_GEQ;
-			}
-			return SB_GTR;
-		case '%': ch = getCh(); return SB_PERCENT;
-		case '(': ch = getCh(); return SB_LPARENT;
-		case ')': ch = getCh(); return SB_RPARENT;
-		case '[': ch = getCh(); return SB_LBRACK;
-		case ']': ch = getCh(); return SB_RBRACK;
-		case '.': ch = getCh(); return SB_PERIOD;
-		case ',': ch = getCh(); return SB_COMMA;
-		case ';': ch = getCh(); return SB_SEMICOLON;
-		default:
-			ch = getCh();
-			return TK_NONE;
-		}
 	}
-
+	switch(ch){
+	case '+': ch = getCh(); return SB_PLUS;
+	case '-': ch = getCh(); return SB_MINUS;
+	case '*': ch = getCh(); return SB_TIMES;
+	case '/': ch = getCh(); return SB_SLASH;
+	case '=': ch = getCh(); return SB_EQU;
+	case '<':
+		ch = getCh();
+		if (ch == '=') {
+			ch = getCh();
+			return SB_LEQ;
+		} else if (ch == '>') {
+			ch = getCh();
+			return SB_NEQ;
+		}
+		return SB_LSS;
+	case '>':
+		ch = getCh();
+		if (ch == '=') {
+			ch = getCh();
+			return SB_GEQ;
+		}
+		return SB_GTR;
+	case '%': ch = getCh(); return SB_PERCENT;
+	case '(': ch = getCh(); return SB_LPARENT;
+	case ')': ch = getCh(); return SB_RPARENT;
+	case '[': ch = getCh(); return SB_LBRACK;
+	case ']': ch = getCh(); return SB_RBRACK;
+	case '.': ch = getCh(); return SB_PERIOD;
+	case ',': ch = getCh(); return SB_COMMA;
+	case ';': ch = getCh(); return SB_SEMICOLON;
+	default:
+		ch = getCh();
+		return TK_NONE;
+	}
 }
 
 void compile(char * filename) {

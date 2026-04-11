@@ -503,24 +503,23 @@ void factor(void) {
     if (Token == TK_NUMBER) {
         emit(LIT, 0, Num);
         nextToken();
-    } else if (Token == TK_IDENT) {
-        if (strcmp(Id, "SIZEOF") == 0) {
-            nextToken();
-            expect(SB_LPARENT);
-            if (Token != TK_IDENT) {
-                error("SIZEOF: expected identifier");
-            }
-            Object *obj = lookup(Id);
-            if (obj == NULL) {
-                char msg[120];
-                sprintf(msg, "SIZEOF: undeclared identifier %s", Id);
-                error(msg);
-            }
-            nextToken();
-            expect(SB_RPARENT);
-            emitSizeOfObjectValue(obj);
-            return;
+    } else if (Token == KW_SIZEOF) {
+        nextToken();
+        expect(SB_LPARENT);
+        if (Token != TK_IDENT) {
+            error("SIZEOF: expected identifier");
         }
+        Object *obj = lookup(Id);
+        if (obj == NULL) {
+            char msg[120];
+            sprintf(msg, "SIZEOF: undeclared identifier %s", Id);
+            error(msg);
+        }
+        nextToken();
+        expect(SB_RPARENT);
+        emitSizeOfObjectValue(obj);
+        return;
+    } else if (Token == TK_IDENT) {
 
         Object* obj = lookup(Id);
         if (obj == NULL) {
