@@ -1,8 +1,6 @@
 #ifndef CODEGEN_H
 #define CODEGEN_H
 
-#include "semantics.h"
-
 typedef enum {
     LIT, // Load literal value onto stack
     OPR, // Execute arithmetic or logical operation
@@ -11,7 +9,16 @@ typedef enum {
     CAL, // Call procedure at a given level and entry address
     INT, // Increment stack pointer (allocate space for variables)
     JMP, // Unconditional jump to a target address
-    JPC  // Jump to a target address if top of stack is zero (condition false)
+    JPC, // Jump to a target address if top of stack is zero (condition false)
+    LDA, // Push absolute stack address for a symbol
+    LDI, // Load value indirectly from address on top of stack
+    STI, // Store value indirectly (address below top, value on top)
+    RDI, // Read integer from stdin and store to address on top of stack
+    WRI, // Write integer value on top of stack
+    WRS, // Write zero-terminated string variable at level/address
+    WRL, // Write interned string literal by index
+    STS, // Store interned string literal to address on top of stack
+    WNL  // Write newline
 } OpCode;
 
 typedef struct {
@@ -29,5 +36,6 @@ void emit(OpCode op, int l, int a);
 void listCode(void);
 void optimizeCode(void);
 void interpret(void);
+int addStringLiteral(const char *literal);
 
 #endif

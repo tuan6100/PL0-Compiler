@@ -1,10 +1,24 @@
 #include <stdio.h>
-#include <stdlib.h>
+#include <string.h>
 #include "codegen.h"
 #include "parser.h"
+#include "scanner.h"
 
 Instruction code[MAX_CODE_SIZE];
 int cx = 0;
+
+#define MAX_STRING_LITERALS 128
+static char stringLiterals[MAX_STRING_LITERALS][MAX_STRING_LEN + 1];
+static int stringLiteralCount = 0;
+
+int addStringLiteral(const char *literal) {
+    if (stringLiteralCount >= MAX_STRING_LITERALS) {
+        error("too many string literals");
+    }
+    strncpy(stringLiterals[stringLiteralCount], literal, MAX_STRING_LEN);
+    stringLiterals[stringLiteralCount][MAX_STRING_LEN] = '\0';
+    return stringLiteralCount++;
+}
 
 void emit(OpCode op, int l, int a) {
     if (cx >= MAX_CODE_SIZE) {
@@ -19,14 +33,23 @@ void emit(OpCode op, int l, int a) {
 void listCode(void) {
     printf("--- Code Generation ---\n");
     for (int i = 0; i < cx; i++) {
-        printf("%3d %-3s %3d %3d\n", i, 
-            (code[i].op == LIT ? "LIT" : 
-             code[i].op == OPR ? "OPR" : 
-             code[i].op == LOD ? "LOD" : 
-             code[i].op == STO ? "STO" : 
-             code[i].op == CAL ? "CAL" : 
-             code[i].op == INT ? "INT" : 
-             code[i].op == JMP ? "JMP" : "JPC"), 
+        printf("%3d %-3s %d %d\n", i,
+            code[i].op == LIT ? "LIT" :
+                code[i].op == OPR ? "OPR" :
+                code[i].op == LOD ? "LOD" :
+                code[i].op == STO ? "STO" :
+                code[i].op == CAL ? "CAL" :
+                code[i].op == INT ? "INT" :
+                code[i].op == JMP ? "JMP" :
+                code[i].op == JPC ? "JPC" :
+                code[i].op == LDA ? "LDA" :
+                code[i].op == LDI ? "LDI" :
+                code[i].op == STI ? "STI" :
+                code[i].op == RDI ? "RDI" :
+                code[i].op == WRI ? "WRI" :
+                code[i].op == WRS ? "WRS" :
+                code[i].op == WRL ? "WRL" :
+                code[i].op == STS ? "STS" : "WNL",
             code[i].l, code[i].a);
     }
 }
@@ -76,14 +99,13 @@ void interpret(void) {
     int p = 0; // Program counter
     int b = 1; // Base pointer
     int t = 0; // Top of stack
-    Instruction i;
 
     stack[1] = 0; // Static link
     stack[2] = 0; // Dynamic link
     stack[3] = 0; // Return address
 
     do {
-        i = code[p++];
+        Instruction i = code[p++];
         switch (i.op) {
             case LIT: t++; stack[t] = i.a; break;
             case OPR:
@@ -115,6 +137,61 @@ void interpret(void) {
             case STO: stack[base(i.l, b) + i.a] = stack[t]; 
                  t--; 
                  break;
+            case LDA:
+                t++;
+                stack[t] = base(i.l, b) + i.a;
+                break;
+            case LDI:
+                stack[t] = stack[stack[t]];
+                break;
+            case STI:
+                stack[stack[t - 1]] = stack[t];
+                t -= 2;
+                break;
+            case RDI: {
+                int value;
+                if (scanf("%d", &value) != 1) {
+                    error("READ failed: expected integer input");
+                }
+                stack[stack[t]] = value;
+                t--;
+                break;
+            }
+            case WRI:
+                printf("%d", stack[t]);
+                t--;
+                break;
+            case WRS: {
+                int addr = base(i.l, b) + i.a;
+                while (addr < STACK_SIZE && stack[addr] != 0) {
+                    putchar((char)stack[addr]);
+                    addr++;
+                }
+                break;
+            }
+            case WRL:
+                if (i.a < 0 || i.a >= stringLiteralCount) {
+                    error("invalid string literal reference");
+                }
+                printf("%s", stringLiterals[i.a]);
+                break;
+            case STS: {
+                if (i.a < 0 || i.a >= stringLiteralCount) {
+                    error("invalid string literal reference");
+                }
+                const char *src = stringLiterals[i.a];
+                int addr = stack[t--];
+                int k = 0;
+                while (k < MAX_STRING_LEN && src[k] != '\0') {
+                    stack[addr + k] = (unsigned char)src[k];
+                    k++;
+                }
+                stack[addr + k] = 0;
+                break;
+            }
+            case WNL:
+                putchar('\n');
+                break;
             case CAL:
                 stack[t + 1] = base(i.l, b);
                 stack[t + 2] = b;

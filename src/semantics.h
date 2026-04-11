@@ -6,8 +6,11 @@
 typedef enum {
     OBJ_CONSTANT,
     OBJ_VARIABLE,
+    OBJ_PARAMETER,
     OBJ_PROCEDURE
 } ObjectType;
+
+#define MAX_PROC_PARAMS 16
 
 typedef struct {
     char name[MAX_IDENT_LEN + 1];
@@ -15,6 +18,11 @@ typedef struct {
     int value; // For constants
     int level; // For variables and procedures
     int address; // For code generation (future)
+    int size; // Number of stack cells used by this symbol (variables only)
+    int isString; // 1 for STRING declarations, 0 otherwise
+    int isRefParam; // 1 when this symbol is a VAR parameter
+    int paramCount; // Procedure parameter count
+    int paramIsRef[MAX_PROC_PARAMS]; // Procedure parameter passing mode
 } Object;
 
 #define MAX_SYMBOL_TABLE_SIZE 100
@@ -27,7 +35,7 @@ typedef struct {
 } SymbolTable;
 
 void initSymbolTable(void);
-void enter(char *name, ObjectType type, int value);
+void enter(char *name, ObjectType type, int value, int size, int isString);
 Object* lookup(char *name);
 void enterBlock(void);
 void exitBlock(void);

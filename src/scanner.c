@@ -17,15 +17,19 @@ const Keyword keywords[KEYWORDS_COUNT] = {
    {"ODD",KW_ODD},
 	{"PROCEDURE", KW_PROCEDURE},
   {"PROGRAM", KW_PROGRAM},
+  {"READ", KW_READ},
+  {"READLN", KW_READ},
   {"THEN", KW_THEN},
   {"TO", KW_TO},
   {"VAR", KW_VAR},
-	{"WHILE", KW_WHILE}
+	{"WHILE", KW_WHILE},
+	{"WRITE", KW_WRITE},
+	{"WRITELN", KW_WRITELN}
 };
 
-const char TabToken[][11] = {	"NONE", "IDENT", "NUMBER",
+const char TabToken[][12] = {	"NONE", "IDENT", "NUMBER", "STRING",
 		"BEGIN", "CALL", "CONST", "DO",  "ELSE", "END", "FOR", "IF",
-		"ODD", "PROCEDURE", "PROGRAM", "THEN", "TO", "VAR", "WHILE",
+		"ODD", "PROCEDURE", "PROGRAM", "READ", "THEN", "TO", "VAR", "WHILE", "WRITE", "WRITELN",
 
 		"PLUS", "MINUS", "TIMES", "SLASH", "EQU", "NEQ", "LSS",
 		"LEQ", "GTR", "GEQ", "PERCENT", "LPARENT", "RPARENT",
@@ -36,6 +40,7 @@ const char TabToken[][11] = {	"NONE", "IDENT", "NUMBER",
 TokenType Token;
 int		  Num;
 char	  Id[MAX_IDENT_LEN + 1];
+char      StringLiteral[MAX_STRING_LEN + 1];
 
 FILE * f;
 int ch;
@@ -50,11 +55,7 @@ TokenType checkKeyword(char * str){
 }
 
 int getCh() {
-  int c = fgetc(f);
-  if (c == EOF) {
-	return EOF;
-  }
-  return toupper(c);
+  return fgetc(f);
 }
 
 TokenType getToken() {
@@ -64,18 +65,34 @@ TokenType getToken() {
 		return TK_NONE;
 	}
 	if(isalpha(ch) || ch == '_') {		//bat dau la mot chu cai hoac dau gach duoi
-		Id[0] = ch;
+		Id[0] = (char)toupper(ch);
 		int i = 0;
 		ch = getCh();
 		while(isalpha(ch) || isdigit(ch) || ch == '_') {
 			if (i < MAX_IDENT_LEN - 1) {
 				i++;
-				Id[i] = ch;
+				Id[i] = (char)toupper(ch);
 			}
 			ch = getCh();
 		}
 		Id[i+1] = '\0';
 		return checkKeyword(Id);
+	} else if (ch == '"') {
+		int i = 0;
+		ch = getCh();
+		while (ch != EOF && ch != '"') {
+			if (i < MAX_STRING_LEN) {
+				StringLiteral[i++] = (char)ch;
+			}
+			ch = getCh();
+		}
+		StringLiteral[i] = '\0';
+		if (ch != '"') {
+			printf("Unterminated string literal\n");
+			return TK_NONE;
+		}
+		ch = getCh();
+		return TK_STRING;
 	} else if( isdigit(ch)) {  //bat dau la mot chu so
 		Num = 0;
 		int length = 0;

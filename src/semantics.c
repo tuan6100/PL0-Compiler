@@ -11,11 +11,10 @@ void initSymbolTable(void) {
     symbolTable.count = 0;
 }
 
-void enter(char *name, ObjectType type, int value) {
+void enter(char *name, ObjectType type, int value, int size, int isString) {
     // Check if the identifier is already declared in the current scope
-    int i;
     int startIdx = (currentLevel > 0) ? symbolTable.prev_count[currentLevel - 1] : 0;
-    for (i = startIdx; i < symbolTable.count; i++) {
+    for (int i = startIdx; i < symbolTable.count; i++) {
         if (strcmp(symbolTable.symbols[i].name, name) == 0) {
             char errorMsg[100];
             sprintf(errorMsg, "identifier '%s' already declared in this scope", name);
@@ -33,17 +32,24 @@ void enter(char *name, ObjectType type, int value) {
     obj->type = type;
     obj->value = value;
     obj->level = currentLevel;
+    obj->size = (type == OBJ_VARIABLE && size > 0) ? size : 0;
+    obj->isString = (type == OBJ_VARIABLE) ? isString : 0;
+    obj->isRefParam = 0;
+    obj->paramCount = 0;
+    for (int k = 0; k < MAX_PROC_PARAMS; k++) {
+        obj->paramIsRef[k] = 0;
+    }
 
     if (type == OBJ_VARIABLE) {
-        // Find how many variables are already in this scope to assign address
+        // Compute current scope stack offset for this variable/array/string.
         int varCount = 0;
         int sIdx = (currentLevel > 0) ? symbolTable.prev_count[currentLevel - 1] : 0;
         for (int j = sIdx; j < symbolTable.count - 1; j++) {
             if (symbolTable.symbols[j].type == OBJ_VARIABLE) {
-                varCount++;
+                varCount += symbolTable.symbols[j].size;
             }
         }
-        obj->address = 3 + varCount; // 3 is for static link, dynamic link, return address
+        obj->address = 3 + varCount; // static link, dynamic link, return address
     }
 }
 
@@ -52,7 +58,7 @@ int getVarCount(void) {
     int startIdx = (currentLevel > 0) ? symbolTable.prev_count[currentLevel - 1] : 0;
     for (int i = startIdx; i < symbolTable.count; i++) {
         if (symbolTable.symbols[i].type == OBJ_VARIABLE) {
-            varCount++;
+            varCount += symbolTable.symbols[i].size;
         }
     }
     return varCount;
