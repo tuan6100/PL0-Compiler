@@ -18,7 +18,11 @@ typedef enum {
     WRS, // Write zero-terminated string variable at level/address
     WRL, // Write interned string literal by index
     STS, // Store interned string literal to address on top of stack
-    WNL  // Write newline
+    WNL, // Write newline
+    SCLR, // Clear zero-terminated string at address on top of stack
+    CATL, // Append interned string literal to destination address on top of stack
+    CATV, // Append source string address (top) to destination (below top)
+    CATI  // Append integer value (top) to destination (below top)
 } OpCode;
 
 typedef struct {

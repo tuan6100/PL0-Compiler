@@ -16,6 +16,8 @@ typedef struct {
     char name[MAX_IDENT_LEN + 1];
     ObjectType type;
     int value; // For constants
+    int constIsString; // 1 when constant value is a string literal
+    char constString[MAX_STRING_LEN + 1]; // String constant payload
     int level; // For variables and procedures
     int address; // For code generation (future)
     int size; // Number of stack cells used by this symbol (variables only)
@@ -23,6 +25,7 @@ typedef struct {
     int isRefParam; // 1 when this symbol is a VAR parameter
     int paramCount; // Procedure parameter count
     int paramIsRef[MAX_PROC_PARAMS]; // Procedure parameter passing mode
+    int paramSize[MAX_PROC_PARAMS]; // Formal parameter size (1 for scalar, >1 for array)
 } Object;
 
 #define MAX_SYMBOL_TABLE_SIZE 100

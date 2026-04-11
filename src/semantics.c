@@ -31,13 +31,16 @@ void enter(char *name, ObjectType type, int value, int size, int isString) {
     obj->name[MAX_IDENT_LEN] = '\0';
     obj->type = type;
     obj->value = value;
+    obj->constIsString = 0;
+    obj->constString[0] = '\0';
     obj->level = currentLevel;
-    obj->size = (type == OBJ_VARIABLE && size > 0) ? size : 0;
-    obj->isString = (type == OBJ_VARIABLE) ? isString : 0;
+    obj->size = ((type == OBJ_VARIABLE || type == OBJ_PARAMETER) && size > 0) ? size : 0;
+    obj->isString = (type == OBJ_VARIABLE || type == OBJ_PARAMETER) ? isString : 0;
     obj->isRefParam = 0;
     obj->paramCount = 0;
     for (int k = 0; k < MAX_PROC_PARAMS; k++) {
         obj->paramIsRef[k] = 0;
+        obj->paramSize[k] = 0;
     }
 
     if (type == OBJ_VARIABLE) {

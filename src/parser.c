@@ -15,8 +15,14 @@ extern char      StringLiteral[MAX_STRING_LEN + 1];
 
 static int pendingParamCount = 0;
 static int pendingParamIsRef[MAX_PROC_PARAMS];
+static int pendingParamSize[MAX_PROC_PARAMS];
 static char pendingParamName[MAX_PROC_PARAMS][MAX_IDENT_LEN + 1];
 static int pendingParamLevel = -1;
+
+static const char *interpExprPtr;
+
+static int tokenStartsStringValueExpr(void);
+static void emitAppendStringTerm(const Object *target);
 
 // ─── Tiện ích ────────────────────────────────────────────────────────────────
 
@@ -75,6 +81,337 @@ static void emitStoreObjectValue(const Object *obj) {
     }
 }
 
+static int sizeofObject(const Object *obj) {
+    if (obj == NULL) {
+        error("SIZEOF: invalid symbol");
+    }
+    if (obj->type == OBJ_CONSTANT) {
+        if (obj->constIsString) {
+            return (int)strlen(obj->constString);
+        }
+        return 1;
+    }
+    if (obj->type == OBJ_VARIABLE || obj->type == OBJ_PARAMETER) {
+        return (obj->size > 0) ? obj->size : 1;
+    }
+    error("SIZEOF: procedure is not supported");
+    return 0;
+}
+
+static void interpSkipSpaces(void) {
+    while (*interpExprPtr != '\0' && isspace((unsigned char)*interpExprPtr)) {
+        interpExprPtr++;
+    }
+}
+
+static int interpAccept(char c) {
+    interpSkipSpaces();
+    if (*interpExprPtr == c) {
+        interpExprPtr++;
+        return 1;
+    }
+    return 0;
+}
+
+static void interpParseExpression(void);
+
+static void interpParseFactor(void) {
+    interpSkipSpaces();
+    if (*interpExprPtr == '\0') {
+        error("interpolation: unexpected end of expression");
+    }
+
+    if (*interpExprPtr == '(') {
+        interpExprPtr++;
+        interpParseExpression();
+        if (!interpAccept(')')) {
+            error("interpolation: expected ')' ");
+        }
+        return;
+    }
+
+    if (isdigit((unsigned char)*interpExprPtr)) {
+        int value = 0;
+        while (isdigit((unsigned char)*interpExprPtr)) {
+            value = value * 10 + (*interpExprPtr - '0');
+            interpExprPtr++;
+        }
+        emit(LIT, 0, value);
+        return;
+    }
+
+    if (isalpha((unsigned char)*interpExprPtr) || *interpExprPtr == '_') {
+        char name[MAX_IDENT_LEN + 1];
+        int n = 0;
+        while (isalpha((unsigned char)*interpExprPtr) || isdigit((unsigned char)*interpExprPtr) || *interpExprPtr == '_') {
+            if (n < MAX_IDENT_LEN) {
+                name[n++] = (char)toupper((unsigned char)*interpExprPtr);
+            }
+            interpExprPtr++;
+        }
+        name[n] = '\0';
+
+        if (strcmp(name, "SIZEOF") == 0) {
+            if (!interpAccept('(')) {
+                error("interpolation: SIZEOF expects '(' ");
+            }
+            interpSkipSpaces();
+            if (!(isalpha((unsigned char)*interpExprPtr) || *interpExprPtr == '_')) {
+                error("interpolation: SIZEOF expects identifier");
+            }
+            char targetName[MAX_IDENT_LEN + 1];
+            int m = 0;
+            while (isalpha((unsigned char)*interpExprPtr) || isdigit((unsigned char)*interpExprPtr) || *interpExprPtr == '_') {
+                if (m < MAX_IDENT_LEN) {
+                    targetName[m++] = (char)toupper((unsigned char)*interpExprPtr);
+                }
+                interpExprPtr++;
+            }
+            targetName[m] = '\0';
+            if (!interpAccept(')')) {
+                error("interpolation: SIZEOF missing ')' ");
+            }
+            Object *targetObj = lookup(targetName);
+            if (targetObj == NULL) {
+                char msg[120];
+                sprintf(msg, "interpolation: SIZEOF undeclared identifier %s", targetName);
+                error(msg);
+            }
+            emit(LIT, 0, sizeofObject(targetObj));
+            return;
+        }
+
+        Object *obj = lookup(name);
+        if (obj == NULL) {
+            char msg[120];
+            sprintf(msg, "Undeclared identifier in interpolation: %s", name);
+            error(msg);
+        }
+
+        interpSkipSpaces();
+        if (*interpExprPtr == '[') {
+            if (obj->type == OBJ_PROCEDURE) {
+                error("interpolation: procedure has no printable value");
+            }
+            if (obj->type == OBJ_CONSTANT || obj->isString || obj->size <= 1) {
+                error("interpolation: indexed access requires numeric array variable");
+            }
+            emitLoadObjectAddress(obj);
+            interpExprPtr++; // consume '['
+            interpParseExpression();
+            if (!interpAccept(']')) {
+                error("interpolation: expected ']' ");
+            }
+            emit(OPR, 0, 2);
+            emit(LDI, 0, 0);
+            return;
+        }
+
+        if (obj->type == OBJ_PROCEDURE) {
+            error("interpolation: procedure has no printable value");
+        }
+        if (obj->type == OBJ_CONSTANT) {
+            if (obj->constIsString) {
+                error("interpolation arithmetic does not support STRING constants");
+            }
+            emit(LIT, 0, obj->value);
+            return;
+        }
+        if (obj->isString) {
+            error("interpolation arithmetic does not support STRING variables");
+        }
+        if (obj->size > 1) {
+            error("interpolation arithmetic requires scalar variable");
+        }
+        emitLoadObjectValue(obj);
+        return;
+    }
+
+    error("interpolation: invalid factor");
+}
+
+static void interpParseTerm(void) {
+    interpParseFactor();
+    while (1) {
+        interpSkipSpaces();
+        if (*interpExprPtr == '*') {
+            interpExprPtr++;
+            interpParseFactor();
+            emit(OPR, 0, 4);
+        } else if (*interpExprPtr == '/') {
+            interpExprPtr++;
+            interpParseFactor();
+            emit(OPR, 0, 5);
+        } else {
+            break;
+        }
+    }
+}
+
+static void interpParseExpression(void) {
+    int unaryMinus = 0;
+    interpSkipSpaces();
+    if (*interpExprPtr == '+' || *interpExprPtr == '-') {
+        unaryMinus = (*interpExprPtr == '-');
+        interpExprPtr++;
+    }
+
+    interpParseTerm();
+    if (unaryMinus) {
+        emit(OPR, 0, 1);
+    }
+
+    while (1) {
+        interpSkipSpaces();
+        if (*interpExprPtr == '+') {
+            interpExprPtr++;
+            interpParseTerm();
+            emit(OPR, 0, 2);
+        } else if (*interpExprPtr == '-') {
+            interpExprPtr++;
+            interpParseTerm();
+            emit(OPR, 0, 3);
+        } else {
+            break;
+        }
+    }
+}
+
+static void emitInterpolatedBracedValue(const char *text, int len) {
+    char expr[MAX_STRING_LEN + 1];
+    if (len <= 0) {
+        error("interpolation: empty ${} expression");
+    }
+    if (len > MAX_STRING_LEN) {
+        len = MAX_STRING_LEN;
+    }
+    memcpy(expr, text, (size_t)len);
+    expr[len] = '\0';
+
+    // Fast path: ${IDENT} can print STRING or numeric symbol directly.
+    {
+        int i = 0;
+        while (isspace((unsigned char)expr[i])) i++;
+        int start = i;
+        if (isalpha((unsigned char)expr[i]) || expr[i] == '_') {
+            char name[MAX_IDENT_LEN + 1];
+            int n = 0;
+            while (isalpha((unsigned char)expr[i]) || isdigit((unsigned char)expr[i]) || expr[i] == '_') {
+                if (n < MAX_IDENT_LEN) {
+                    name[n++] = (char)toupper((unsigned char)expr[i]);
+                }
+                i++;
+            }
+            while (isspace((unsigned char)expr[i])) i++;
+            if (expr[i] == '\0' && n > 0) {
+                name[n] = '\0';
+                Object *obj = lookup(name);
+                if (obj == NULL) {
+                    char msg[120];
+                    sprintf(msg, "Undeclared placeholder: %s", name);
+                    error(msg);
+                }
+                if (obj->type == OBJ_PROCEDURE) {
+                    error("interpolation: procedure has no printable value");
+                }
+                if (obj->type == OBJ_CONSTANT) {
+                    if (obj->constIsString) {
+                        emit(WRL, 0, addStringLiteral(obj->constString));
+                    } else {
+                        emit(LIT, 0, obj->value);
+                        emit(WRI, 0, 0);
+                    }
+                    return;
+                }
+                if (obj->isString) {
+                    emit(WRS, getCurrentLevel() - obj->level, obj->address);
+                    return;
+                }
+                if (obj->size > 1) {
+                    error("interpolation: array requires explicit index in expression");
+                }
+                emitLoadObjectValue(obj);
+                emit(WRI, 0, 0);
+                return;
+            }
+        }
+        (void)start;
+    }
+
+    // General numeric expression path.
+    interpExprPtr = expr;
+    interpParseExpression();
+    interpSkipSpaces();
+    if (*interpExprPtr != '\0') {
+        error("interpolation: invalid trailing tokens");
+    }
+    emit(WRI, 0, 0);
+}
+
+static void emitInterpolatedString(const char *literal);
+
+static void emitWriteAtom(void) {
+    if (Token == TK_STRING) {
+        emitInterpolatedString(StringLiteral);
+        nextToken();
+    } else if (Token == TK_NUMBER) {
+        emit(LIT, 0, Num);
+        emit(WRI, 0, 0);
+        nextToken();
+    } else if (Token == TK_IDENT) {
+        Object *obj = lookup(Id);
+        if (obj == NULL) {
+            char msg[100];
+            sprintf(msg, "Undeclared identifier: %s", Id);
+            error(msg);
+        }
+        if (obj->type == OBJ_PROCEDURE) {
+            error("Cannot print procedure directly");
+        }
+        if (obj->type == OBJ_CONSTANT) {
+            if (obj->constIsString) {
+                emit(WRL, 0, addStringLiteral(obj->constString));
+            } else {
+                emit(LIT, 0, obj->value);
+                emit(WRI, 0, 0);
+            }
+            nextToken();
+            return;
+        }
+
+        nextToken();
+        if (isAssignableObject(obj) && obj->isString) {
+            if (Token == SB_LBRACK) {
+                error("WRITE/WRITELN of STRING variable does not take index");
+            }
+            emit(WRS, getCurrentLevel() - obj->level, obj->address);
+            return;
+        }
+
+        if (Token == SB_LBRACK) {
+            if (obj->size <= 1) {
+                error("Indexed WRITE requires an array variable");
+            }
+            emitLoadObjectAddress(obj);
+            nextToken();
+            expression();
+            expect(SB_RBRACK);
+            emit(OPR, 0, 2);
+            emit(LDI, 0, 0);
+            emit(WRI, 0, 0);
+        } else {
+            if (obj->size > 1) {
+                error("Array variable requires an index");
+            }
+            emitLoadObjectValue(obj);
+            emit(WRI, 0, 0);
+        }
+    } else {
+        expression();
+        emit(WRI, 0, 0);
+    }
+}
+
 // ─── Phân tích biểu thức ─────────────────────────────────────────────────────
 
 // factor = NUMBER | IDENT | '(' expression ')'
@@ -83,6 +420,25 @@ void factor(void) {
         emit(LIT, 0, Num);
         nextToken();
     } else if (Token == TK_IDENT) {
+        if (strcmp(Id, "SIZEOF") == 0) {
+            nextToken();
+            expect(SB_LPARENT);
+            if (Token != TK_IDENT) {
+                error("SIZEOF: expected identifier");
+            }
+            Object *obj = lookup(Id);
+            if (obj == NULL) {
+                char msg[120];
+                sprintf(msg, "SIZEOF: undeclared identifier %s", Id);
+                error(msg);
+            }
+            int s = sizeofObject(obj);
+            nextToken();
+            expect(SB_RPARENT);
+            emit(LIT, 0, s);
+            return;
+        }
+
         Object* obj = lookup(Id);
         if (obj == NULL) {
             char msg[100];
@@ -93,6 +449,9 @@ void factor(void) {
             error("Cannot use procedure in expression");
         }
         if (obj->type == OBJ_CONSTANT) {
+            if (obj->constIsString) {
+                error("Cannot use STRING constant in numeric expression");
+            }
             emit(LIT, 0, obj->value);
             nextToken();
         } else if (obj->isString) {
@@ -102,9 +461,6 @@ void factor(void) {
             if (Token == SB_LBRACK) {
                 if (obj->size <= 1) {
                     error("Indexed access is only valid for arrays");
-                }
-                if (obj->isRefParam) {
-                    error("Indexed access on VAR parameter is not supported");
                 }
                 emitLoadObjectAddress(obj);
                 nextToken();
@@ -217,6 +573,19 @@ static void emitInterpolatedString(const char *literal) {
         emitStringChunk(literal + start, i - start);
 
         i++;
+        if (literal[i] == '{') {
+            int exprStart = ++i;
+            while (literal[i] != '\0' && literal[i] != '}') {
+                i++;
+            }
+            if (literal[i] != '}') {
+                error("interpolation: missing '}'");
+            }
+            emitInterpolatedBracedValue(literal + exprStart, i - exprStart);
+            i++;
+            start = i;
+            continue;
+        }
         if (!(isalpha((unsigned char)literal[i]) || literal[i] == '_')) {
             emitStringChunk("$", 1);
             start = i;
@@ -240,11 +609,15 @@ static void emitInterpolatedString(const char *literal) {
             error(msg);
         }
         if (obj->type == OBJ_PROCEDURE) {
-            error("Placeholder cannot reference procedure");
+            error("interpolation: procedure has no printable value");
         }
         if (obj->type == OBJ_CONSTANT) {
-            emit(LIT, 0, obj->value);
-            emit(WRI, 0, 0);
+            if (obj->constIsString) {
+                emit(WRL, 0, addStringLiteral(obj->constString));
+            } else {
+                emit(LIT, 0, obj->value);
+                emit(WRI, 0, 0);
+            }
         } else {
             if (obj->isString) {
                 emit(WRS, getCurrentLevel() - obj->level, obj->address);
@@ -291,9 +664,6 @@ void statement(void) {
             if (obj->size <= 1) {
                 error("Indexed assignment requires an array variable");
             }
-            if (obj->isRefParam) {
-                error("Indexed assignment on VAR parameter is not supported");
-            }
             emitLoadObjectAddress(obj);
             nextToken();
             expression();
@@ -304,25 +674,23 @@ void statement(void) {
 
         expect(SB_ASSIGN);
 
-        if (obj->isString && !isIndexed) {
-            if (Token != TK_STRING) {
-                error("STRING assignment requires a string literal");
+        if (!isIndexed && (obj->isString || tokenStartsStringValueExpr() || obj->size > 1)) {
+            if (isIndexed) {
+                error("Cannot assign string expression to indexed storage");
             }
+            if (obj->size <= 1) {
+                error("String assignment requires variable declared with size, e.g. VAR S[32]");
+            }
+            obj->isString = 1;
+
             emitLoadObjectAddress(obj);
-            emit(STS, 0, addStringLiteral(StringLiteral));
-            nextToken();
-        } else {
-            if (Token == TK_STRING && !isIndexed) {
-                // Strings now use VAR declarations; require multi-cell storage (e.g. VAR s[32]).
-                if (obj->size <= 1) {
-                    error("String assignment requires variable declared with size, e.g. VAR S[32]");
-                }
-                obj->isString = 1;
-                emitLoadObjectAddress(obj);
-                emit(STS, 0, addStringLiteral(StringLiteral));
+            emit(SCLR, 0, 0);
+            emitAppendStringTerm(obj);
+            while (Token == SB_PLUS) {
                 nextToken();
-                return;
+                emitAppendStringTerm(obj);
             }
+        } else {
             if (obj->isString && isIndexed) {
                 error("Cannot assign numeric value to indexed STRING storage");
             }
@@ -365,9 +733,6 @@ void statement(void) {
             }
             nextToken();
             if (Token == SB_LBRACK) {
-                if (obj->isRefParam) {
-                    error("CALL READ with indexed VAR parameter is not supported");
-                }
                 emitLoadObjectAddress(obj);
                 nextToken();
                 expression();
@@ -384,29 +749,10 @@ void statement(void) {
             nextToken();
             expect(SB_LPARENT);
             if (Token != SB_RPARENT) {
-                if (Token == TK_STRING) {
-                    emitInterpolatedString(StringLiteral);
+                emitWriteAtom();
+                while (Token == SB_PLUS) {
                     nextToken();
-                } else if (Token == TK_IDENT) {
-                    Object *obj = lookup(Id);
-                    if (obj == NULL) {
-                        char msg[100];
-                        sprintf(msg, "Undeclared identifier: %s", Id);
-                        error(msg);
-                    }
-                    if (isAssignableObject(obj) && obj->isString) {
-                        nextToken();
-                        if (Token == SB_LBRACK) {
-                            error("CALL WRITE/CALL WRITELN of STRING variable does not take index");
-                        }
-                        emit(WRS, getCurrentLevel() - obj->level, obj->address);
-                    } else {
-                        expression();
-                        emit(WRI, 0, 0);
-                    }
-                } else {
-                    expression();
-                    emit(WRI, 0, 0);
+                    emitWriteAtom();
                 }
             }
             expect(SB_RPARENT);
@@ -439,8 +785,17 @@ void statement(void) {
                                 error("VAR parameter requires an identifier argument");
                             }
                             Object *arg = lookup(Id);
-                            if (arg == NULL || !isAssignableObject(arg) || arg->size != 1 || arg->isString) {
-                                error("VAR parameter requires scalar integer variable");
+                            if (arg == NULL || !isAssignableObject(arg) || arg->isString) {
+                                error("VAR parameter requires variable argument");
+                            }
+                            if (proc->paramSize[argCount] > 1) {
+                                if (arg->size <= 1) {
+                                    error("Array parameter requires array argument");
+                                }
+                            } else {
+                                if (arg->size != 1) {
+                                    error("Scalar VAR parameter requires scalar argument");
+                                }
                             }
                             if (arg->isRefParam) {
                                 emit(LOD, getCurrentLevel() - arg->level, arg->address);
@@ -449,7 +804,26 @@ void statement(void) {
                             }
                             nextToken();
                         } else {
-                            expression();
+                            if (proc->paramSize[argCount] > 1) {
+                                error("Array parameter must be passed by VAR/reference");
+                            }
+                            if (Token == TK_STRING) {
+                                emit(LIT, 0, addStringLiteral(StringLiteral));
+                                nextToken();
+                            } else if (Token == TK_IDENT) {
+                                Object *argObj = lookup(Id);
+                                if (argObj != NULL && argObj->type == OBJ_CONSTANT && argObj->constIsString) {
+                                    emit(LIT, 0, addStringLiteral(argObj->constString));
+                                    nextToken();
+                                } else if (argObj != NULL && (argObj->type == OBJ_VARIABLE || argObj->type == OBJ_PARAMETER) && argObj->isString) {
+                                    emitLoadObjectAddress(argObj);
+                                    nextToken();
+                                } else {
+                                    expression();
+                                }
+                            } else {
+                                expression();
+                            }
                         }
                         argCount++;
                         if (Token == SB_COMMA) {
@@ -556,17 +930,17 @@ void block(void) {
 
     if (pendingParamCount > 0 && getCurrentLevel() == pendingParamLevel) {
         for (int i = 0; i < pendingParamCount; i++) {
-            enter(pendingParamName[i], OBJ_PARAMETER, 0, 1, 0);
+            enter(pendingParamName[i], OBJ_PARAMETER, 0, pendingParamSize[i], 0);
             Object *param = lookup(pendingParamName[i]);
             param->address = i - pendingParamCount; // arguments are below base pointer
-            param->size = 1;
+            param->size = pendingParamSize[i];
             param->isRefParam = pendingParamIsRef[i];
         }
         pendingParamCount = 0;
         pendingParamLevel = -1;
     }
 
-    // Khai báo hằng: CONST ident = number { , ident = number } ;
+    // Khai báo hằng: CONST ident = (number|string) { , ident = (number|string) } ;
     if (Token == KW_CONST) {
         nextToken();
         do {
@@ -575,9 +949,19 @@ void block(void) {
             strcpy(name, Id);
             nextToken();
             expect(SB_EQU);
-            if (Token != TK_NUMBER) error("block: expected number in CONST");
-            enter(name, OBJ_CONSTANT, Num, 0, 0);
-            nextToken();
+            if (Token == TK_NUMBER) {
+                enter(name, OBJ_CONSTANT, Num, 0, 0);
+                nextToken();
+            } else if (Token == TK_STRING) {
+                enter(name, OBJ_CONSTANT, 0, 0, 0);
+                Object *obj = lookup(name);
+                obj->constIsString = 1;
+                strncpy(obj->constString, StringLiteral, MAX_STRING_LEN);
+                obj->constString[MAX_STRING_LEN] = '\0';
+                nextToken();
+            } else {
+                error("block: expected number or string in CONST");
+            }
             if (Token == SB_COMMA) nextToken(); else break;
         } while (1);
         expect(SB_SEMICOLON);
@@ -630,22 +1014,29 @@ void block(void) {
                     if (Token != TK_IDENT) {
                         error("procedure parameter: expected identifier");
                     }
-                    while (1) {
-                        if (pendingParamCount >= MAX_PROC_PARAMS) {
-                            error("too many procedure parameters");
-                        }
-                        strcpy(pendingParamName[pendingParamCount], Id);
-                        pendingParamIsRef[pendingParamCount] = isRef;
-                        obj->paramIsRef[pendingParamCount] = isRef;
-                        pendingParamCount++;
-                        nextToken();
-                        if (Token == SB_COMMA) {
-                            nextToken();
-                            continue;
-                        }
-                        break;
+                    if (pendingParamCount >= MAX_PROC_PARAMS) {
+                        error("too many procedure parameters");
                     }
-                    if (Token == SB_SEMICOLON) {
+                    int paramSize = 1;
+                    strcpy(pendingParamName[pendingParamCount], Id);
+                    nextToken();
+                    if (Token == SB_LBRACK) {
+                        nextToken();
+                        if (Token != TK_NUMBER || Num <= 0) {
+                            error("procedure parameter array size must be a positive number");
+                        }
+                        paramSize = Num;
+                        nextToken();
+                        expect(SB_RBRACK);
+                        isRef = 1; // Arrays are passed by reference.
+                    }
+                    pendingParamIsRef[pendingParamCount] = isRef;
+                    pendingParamSize[pendingParamCount] = paramSize;
+                    obj->paramIsRef[pendingParamCount] = isRef;
+                    obj->paramSize[pendingParamCount] = paramSize;
+                    pendingParamCount++;
+
+                    if (Token == SB_COMMA || Token == SB_SEMICOLON) {
                         nextToken();
                         continue;
                     }
@@ -658,8 +1049,9 @@ void block(void) {
         pendingParamLevel = getCurrentLevel() + 1;
 
         expect(SB_SEMICOLON);
+        int procEntry = cx;
         block();
-        obj->address = tx0 + 1; // Start of block code
+        obj->address = procEntry;
         expect(SB_SEMICOLON);
     }
 
@@ -691,4 +1083,98 @@ void program(void) {
     optimizeCode();
     // listCode();
     interpret();
+}
+
+static int tokenStartsStringValueExpr(void) {
+    if (Token == TK_STRING) {
+        return 1;
+    }
+    if (Token == TK_IDENT) {
+        Object *obj = lookup(Id);
+        return (obj != NULL && ((obj->type == OBJ_CONSTANT && obj->constIsString) || obj->isString));
+    }
+    return 0;
+}
+
+static void emitAppendStringTerm(const Object *target) {
+    if (Token == TK_STRING) {
+        emitLoadObjectAddress(target);
+        emit(CATL, 0, addStringLiteral(StringLiteral));
+        nextToken();
+        return;
+    }
+
+    if (Token == TK_NUMBER) {
+        emitLoadObjectAddress(target);
+        emit(LIT, 0, Num);
+        emit(CATI, 0, 0);
+        nextToken();
+        return;
+    }
+
+    if (Token == SB_LPARENT) {
+        emitLoadObjectAddress(target);
+        nextToken();
+        expression();
+        expect(SB_RPARENT);
+        emit(CATI, 0, 0);
+        return;
+    }
+
+    if (Token != TK_IDENT) {
+        error("string expression: expected string or numeric term");
+    }
+
+    Object *obj = lookup(Id);
+    if (obj == NULL) {
+        char msg[100];
+        sprintf(msg, "Undeclared identifier: %s", Id);
+        error(msg);
+    }
+    if (obj->type == OBJ_PROCEDURE) {
+        error("string expression: procedure has no value");
+    }
+
+    if (obj->type == OBJ_CONSTANT) {
+        emitLoadObjectAddress(target);
+        if (obj->constIsString) {
+            emit(CATL, 0, addStringLiteral(obj->constString));
+        } else {
+            emit(LIT, 0, obj->value);
+            emit(CATI, 0, 0);
+        }
+        nextToken();
+        return;
+    }
+
+    nextToken();
+    if (obj->isString) {
+        if (Token == SB_LBRACK) {
+            error("string expression: STRING variable does not take index");
+        }
+        emitLoadObjectAddress(target);
+        emitLoadObjectAddress(obj);
+        emit(CATV, 0, 0);
+        return;
+    }
+
+    emitLoadObjectAddress(target);
+    if (Token == SB_LBRACK) {
+        if (obj->size <= 1) {
+            error("string expression: indexed access requires array variable");
+        }
+        emitLoadObjectAddress(obj);
+        nextToken();
+        expression();
+        expect(SB_RBRACK);
+        emit(OPR, 0, 2);
+        emit(LDI, 0, 0);
+        emit(CATI, 0, 0);
+    } else {
+        if (obj->size > 1) {
+            error("string expression: array variable requires an index");
+        }
+        emitLoadObjectValue(obj);
+        emit(CATI, 0, 0);
+    }
 }

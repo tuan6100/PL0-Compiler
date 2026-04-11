@@ -7,9 +7,44 @@
 Instruction code[MAX_CODE_SIZE];
 int cx = 0;
 
+#define STACK_SIZE 5000
+int stack[STACK_SIZE];
+
 #define MAX_STRING_LITERALS 128
 static char stringLiterals[MAX_STRING_LITERALS][MAX_STRING_LEN + 1];
 static int stringLiteralCount = 0;
+
+static void appendToStringAt(int dstAddr, const char *src) {
+    if (dstAddr < 0 || dstAddr >= STACK_SIZE) {
+        error("string destination out of stack bounds");
+    }
+    int end = dstAddr;
+    while (end < STACK_SIZE && stack[end] != 0) {
+        end++;
+    }
+    if (end >= STACK_SIZE) {
+        error("unterminated string in stack");
+    }
+    int i = 0;
+    while (src[i] != '\0' && end < STACK_SIZE - 1) {
+        stack[end++] = (unsigned char)src[i++];
+    }
+    stack[end] = 0;
+}
+
+static void appendStringFromStack(int dstAddr, int srcAddr) {
+    if (srcAddr < 0 || srcAddr >= STACK_SIZE) {
+        error("string source out of stack bounds");
+    }
+    char temp[MAX_STRING_LEN + 1];
+    int i = 0;
+    while (srcAddr + i < STACK_SIZE && i < MAX_STRING_LEN && stack[srcAddr + i] != 0) {
+        temp[i] = (char)stack[srcAddr + i];
+        i++;
+    }
+    temp[i] = '\0';
+    appendToStringAt(dstAddr, temp);
+}
 
 int addStringLiteral(const char *literal) {
     if (stringLiteralCount >= MAX_STRING_LITERALS) {
@@ -49,7 +84,11 @@ void listCode(void) {
                 code[i].op == WRI ? "WRI" :
                 code[i].op == WRS ? "WRS" :
                 code[i].op == WRL ? "WRL" :
-                code[i].op == STS ? "STS" : "WNL",
+                code[i].op == STS ? "STS" :
+                code[i].op == WNL ? "WNL" :
+                code[i].op == SCLR ? "SCL" :
+                code[i].op == CATL ? "CTL" :
+                code[i].op == CATV ? "CTV" : "CTI",
             code[i].l, code[i].a);
     }
 }
@@ -82,9 +121,6 @@ void optimizeCode(void) {
         }
     }
 }
-
-#define STACK_SIZE 500
-int stack[STACK_SIZE];
 
 int base(int l, int b) {
     int bl = b;
@@ -192,6 +228,36 @@ void interpret(void) {
             case WNL:
                 putchar('\n');
                 break;
+            case SCLR: {
+                int addr = stack[t--];
+                if (addr < 0 || addr >= STACK_SIZE) {
+                    error("SCLR address out of bounds");
+                }
+                stack[addr] = 0;
+                break;
+            }
+            case CATL: {
+                int addr = stack[t--];
+                if (i.a < 0 || i.a >= stringLiteralCount) {
+                    error("invalid string literal reference");
+                }
+                appendToStringAt(addr, stringLiterals[i.a]);
+                break;
+            }
+            case CATV: {
+                int srcAddr = stack[t--];
+                int dstAddr = stack[t--];
+                appendStringFromStack(dstAddr, srcAddr);
+                break;
+            }
+            case CATI: {
+                int value = stack[t--];
+                int dstAddr = stack[t--];
+                char temp[32];
+                sprintf(temp, "%d", value);
+                appendToStringAt(dstAddr, temp);
+                break;
+            }
             case CAL:
                 stack[t + 1] = base(i.l, b);
                 stack[t + 2] = b;
