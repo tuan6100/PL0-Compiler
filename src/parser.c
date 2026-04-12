@@ -9,9 +9,12 @@
 
 // Các biến toàn cục từ scanner.c
 extern TokenType Token;
-extern int       Num;
+extern double    Num;
 extern char      Id[MAX_IDENT_LEN + 1];
 extern char      StringLiteral[MAX_STRING_LEN + 1];
+extern int       TokenLine;
+extern int       TokenColumn;
+extern char      CurrentSourceFile[260];
 
 static int pendingParamCount = 0;
 static int pendingParamIsRef[MAX_PROC_PARAMS];
@@ -26,6 +29,8 @@ static int tokenStartsStringValueExpr(void);
 static void emitAppendStringTerm(const Object *target);
 static void emitSizeOfObjectValue(const Object *obj);
 static void parseProcedureCallArguments(const Object *proc);
+static void formatCurrentTokenDetail(char *buf, size_t bufSize);
+static double parseVarInitializerValue(void);
 
 // ─── Tiện ích ────────────────────────────────────────────────────────────────
 
@@ -38,17 +43,83 @@ void nextToken(void) {
 }
 
 void error(const char msg[]) {
-    printf("Error: %s\n", msg);
+    char tokenDetail[320];
+    formatCurrentTokenDetail(tokenDetail, sizeof(tokenDetail));
+    printf("Error at %s:%d:%d: %s%s\n",
+           CurrentSourceFile,
+           TokenLine,
+           TokenColumn,
+           msg,
+           tokenDetail);
     exit(1);
 }
 
 // Kiểm tra token hiện tại có khớp không, nếu có thì đọc token tiếp
 static void expect(TokenType expected) {
     if (Token != expected) {
-        printf("Error: expected token %d but got %d\n", expected, Token);
-        exit(1);
+        char msg[256];
+        snprintf(msg, sizeof(msg), "expected '%s' but got '%s'", TabToken[expected], TabToken[Token]);
+        error(msg);
     }
     nextToken();
+}
+
+static void formatCurrentTokenDetail(char *buf, size_t bufSize) {
+    if (bufSize == 0) {
+        return;
+    }
+    buf[0] = '\0';
+    switch (Token) {
+        case TK_IDENT:
+            snprintf(buf, bufSize, " near identifier '%s'", Id);
+            break;
+        case TK_NUMBER:
+            snprintf(buf, bufSize, " near number %g", Num);
+            break;
+        case TK_STRING:
+            snprintf(buf, bufSize, " near string \"%s\"", StringLiteral);
+            break;
+        case TK_NONE:
+            snprintf(buf, bufSize, " near end of file");
+            break;
+        default:
+            snprintf(buf, bufSize, " near token '%s'", TabToken[Token]);
+            break;
+    }
+}
+
+static double parseVarInitializerValue(void) {
+    int sign = 1;
+    if (Token == SB_PLUS || Token == SB_MINUS) {
+        if (Token == SB_MINUS) {
+            sign = -1;
+        }
+        nextToken();
+    }
+
+    if (Token == TK_NUMBER) {
+        double value = Num;
+        nextToken();
+        return sign * value;
+    }
+
+    if (Token == TK_IDENT) {
+        Object *obj = lookup(Id);
+        if (obj == NULL) {
+            char msg[120];
+            sprintf(msg, "VAR initializer undeclared identifier: %s", Id);
+            error(msg);
+        }
+        if (obj->type != OBJ_CONSTANT || obj->constIsString) {
+            error("VAR initializer expects numeric literal or numeric CONST");
+        }
+        double value = obj->value;
+        nextToken();
+        return sign * value;
+    }
+
+    error("VAR initializer expects numeric literal or numeric CONST");
+    return 0;
 }
 
 static int isAssignableObject(const Object *obj) {
@@ -199,6 +270,42 @@ static int interpAccept(char c) {
 
 static void interpParseExpression(void);
 
+static void interpParseProcedureCallArgs(const Object *proc) {
+    int argCount = 0;
+    if (!interpAccept('(')) {
+        error("interpolation: procedure call expects '('");
+    }
+
+    if (!interpAccept(')')) {
+        while (1) {
+            if (argCount >= proc->paramCount) {
+                error("interpolation: too many procedure arguments");
+            }
+            if (proc->paramIsRef[argCount]) {
+                error("interpolation: VAR/reference parameter is not supported");
+            }
+            if (proc->paramSize[argCount] > 1) {
+                error("interpolation: array parameter is not supported");
+            }
+
+            interpParseExpression();
+            argCount++;
+
+            if (interpAccept(',')) {
+                continue;
+            }
+            if (interpAccept(')')) {
+                break;
+            }
+            error("interpolation: expected ',' or ')' in procedure call");
+        }
+    }
+
+    if (argCount != proc->paramCount) {
+        error("interpolation: argument count mismatch in procedure call");
+    }
+}
+
 static void interpParseFactor(void) {
     interpSkipSpaces();
     if (*interpExprPtr == '\0') {
@@ -273,10 +380,19 @@ static void interpParseFactor(void) {
         }
 
         interpSkipSpaces();
-        if (*interpExprPtr == '[') {
-            if (obj->type == OBJ_PROCEDURE) {
+        if (obj->type == OBJ_PROCEDURE) {
+            if (*interpExprPtr != '(') {
                 error("interpolation: procedure has no printable value");
             }
+            interpParseProcedureCallArgs(obj);
+            if (!obj->hasReturnValue) {
+                error("interpolation: procedure does not return a value");
+            }
+            emit(CAL, getCurrentLevel() - obj->level, obj->address);
+            return;
+        }
+
+        if (*interpExprPtr == '[') {
             if (obj->type == OBJ_CONSTANT || obj->isString || obj->size <= 1) {
                 error("interpolation: indexed access requires numeric array variable");
             }
@@ -289,10 +405,6 @@ static void interpParseFactor(void) {
             emit(OPR, 0, 2);
             emit(LDI, 0, 0);
             return;
-        }
-
-        if (obj->type == OBJ_PROCEDURE) {
-            error("interpolation: procedure has no printable value");
         }
         if (obj->type == OBJ_CONSTANT) {
             if (obj->constIsString) {
@@ -450,7 +562,14 @@ static void emitWriteAtom(void) {
             error(msg);
         }
         if (obj->type == OBJ_PROCEDURE) {
-            error("Cannot print procedure directly");
+            nextToken();
+            parseProcedureCallArguments(obj);
+            if (!obj->hasReturnValue) {
+                error("Procedure does not return a value");
+            }
+            emit(CAL, getCurrentLevel() - obj->level, obj->address);
+            emit(WRI, 0, 0);
+            return;
         }
         if (obj->type == OBJ_CONSTANT) {
             if (obj->constIsString) {
@@ -953,14 +1072,15 @@ void statement(void) {
 
 // ─── Phân tích khối ──────────────────────────────────────────────────────────
 
-// block = [ CONST ident '=' number { ',' ident '=' number } ';' ]
-//         [ VAR ident { ',' ident } ';' ]
-//         { PROCEDURE ident ';' block ';' }
+// block = { CONST-section | VAR-section | PROCEDURE-section }
 //         statement
 void block(void) {
     enterBlock();
     int tx0 = cx;
     emit(JMP, 0, 0);
+    Object *pendingInitObj[MAX_SYMBOL_TABLE_SIZE];
+    double pendingInitValue[MAX_SYMBOL_TABLE_SIZE];
+    int pendingInitCount = 0;
 
     if (pendingParamCount > 0 && getCurrentLevel() == pendingParamLevel) {
         for (int i = 0; i < pendingParamCount; i++) {
@@ -974,59 +1094,74 @@ void block(void) {
         pendingParamLevel = -1;
     }
 
-    // Khai báo hằng: CONST ident = (number|string) { , ident = (number|string) } ;
-    if (Token == KW_CONST) {
-        nextToken();
-        do {
-            if (Token != TK_IDENT) error("block: expected identifier in CONST");
-            char name[MAX_IDENT_LEN + 1];
-            strcpy(name, Id);
+    // Declarations can be mixed in any order before statements.
+    while (Token == KW_CONST || Token == KW_VAR || Token == KW_PROCEDURE) {
+        if (Token == KW_CONST) {
             nextToken();
-            expect(SB_EQU);
-            if (Token == TK_NUMBER) {
-                enter(name, OBJ_CONSTANT, Num, 0, 0);
+            do {
+                if (Token != TK_IDENT) error("block: expected identifier in CONST");
+                char name[MAX_IDENT_LEN + 1];
+                strcpy(name, Id);
                 nextToken();
-            } else if (Token == TK_STRING) {
-                enter(name, OBJ_CONSTANT, 0, 0, 0);
-                Object *obj = lookup(name);
-                obj->constIsString = 1;
-                strncpy(obj->constString, StringLiteral, MAX_STRING_LEN);
-                obj->constString[MAX_STRING_LEN] = '\0';
-                nextToken();
-            } else {
-                error("block: expected number or string in CONST");
-            }
-            if (Token == SB_COMMA) nextToken(); else break;
-        } while (1);
-        expect(SB_SEMICOLON);
-    }
-
-    // Khai báo biến: VAR ident [ '[' number ']' ] { , ident [ '[' number ']' ] } ;
-    if (Token == KW_VAR) {
-        nextToken();
-        do {
-            if (Token != TK_IDENT) error("block: expected identifier in VAR");
-            char varName[MAX_IDENT_LEN + 1];
-            strcpy(varName, Id);
-            nextToken();
-            int size = 1;
-            if (Token == SB_LBRACK) {
-                nextToken();
-                if (Token != TK_NUMBER || Num <= 0) {
-                    error("block: array size must be a positive number");
+                expect(SB_EQU);
+                if (Token == TK_NUMBER) {
+                    enter(name, OBJ_CONSTANT, Num, 0, 0);
+                    nextToken();
+                } else if (Token == TK_STRING) {
+                    enter(name, OBJ_CONSTANT, 0, 0, 0);
+                    Object *obj = lookup(name);
+                    obj->constIsString = 1;
+                    strncpy(obj->constString, StringLiteral, MAX_STRING_LEN);
+                    obj->constString[MAX_STRING_LEN] = '\0';
+                    nextToken();
+                } else {
+                    error("block: expected number or string in CONST");
                 }
-                size = Num;
-                nextToken();
-                expect(SB_RBRACK);
-            }
-            enter(varName, OBJ_VARIABLE, 0, size, 0);
-            if (Token == SB_COMMA) nextToken(); else break;
-        } while (1);
-        expect(SB_SEMICOLON);
-    }
+                if (Token == SB_COMMA) nextToken(); else break;
+            } while (1);
+            expect(SB_SEMICOLON);
+            continue;
+        }
 
-    // Khai báo thủ tục: PROCEDURE ident ; block ;
-    while (Token == KW_PROCEDURE) {
+        if (Token == KW_VAR) {
+            nextToken();
+            do {
+                if (Token != TK_IDENT) error("block: expected identifier in VAR");
+                char varName[MAX_IDENT_LEN + 1];
+                strcpy(varName, Id);
+                nextToken();
+                int size = 1;
+                if (Token == SB_LBRACK) {
+                    nextToken();
+                    if (Token != TK_NUMBER || Num <= 0) {
+                        error("block: array size must be a positive number");
+                    }
+                    size = (int)Num;
+                    nextToken();
+                    expect(SB_RBRACK);
+                }
+                enter(varName, OBJ_VARIABLE, 0, size, 0);
+
+                if (Token == SB_EQU) {
+                    if (size > 1) {
+                        error("VAR initializer currently supports only scalar variables");
+                    }
+                    nextToken();
+                    if (pendingInitCount >= MAX_SYMBOL_TABLE_SIZE) {
+                        error("too many variable initializers in block");
+                    }
+                    pendingInitObj[pendingInitCount] = lookup(varName);
+                    pendingInitValue[pendingInitCount] = parseVarInitializerValue();
+                    pendingInitCount++;
+                }
+
+                if (Token == SB_COMMA) nextToken(); else break;
+            } while (1);
+            expect(SB_SEMICOLON);
+            continue;
+        }
+
+        // PROCEDURE declaration
         nextToken();
         if (Token != TK_IDENT) error("block: expected identifier after PROCEDURE");
         char procName[MAX_IDENT_LEN + 1];
@@ -1059,10 +1194,10 @@ void block(void) {
                         if (Token != TK_NUMBER || Num <= 0) {
                             error("procedure parameter array size must be a positive number");
                         }
-                        paramSize = Num;
+                        paramSize = (int)Num;
                         nextToken();
                         expect(SB_RBRACK);
-                        isRef = 1; // Arrays are passed by reference.
+                        isRef = 1;
                     }
                     pendingParamIsRef[pendingParamCount] = isRef;
                     pendingParamSize[pendingParamCount] = paramSize;
@@ -1094,6 +1229,10 @@ void block(void) {
 
     code[tx0].a = cx;
     emit(INT, 0, getVarCount() + 3);
+    for (int i = 0; i < pendingInitCount; i++) {
+        emit(LIT, 0, pendingInitValue[i]);
+        emit(STO, getCurrentLevel() - pendingInitObj[i]->level, pendingInitObj[i]->address);
+    }
     statement();
     emit(OPR, 0, 0); // Return
     exitBlock();

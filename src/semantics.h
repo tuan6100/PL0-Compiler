@@ -15,7 +15,7 @@ typedef enum {
 typedef struct {
     char name[MAX_IDENT_LEN + 1];
     ObjectType type;
-    int value; // For constants
+    double value; // For numeric constants
     int constIsString; // 1 when constant value is a string literal
     char constString[MAX_STRING_LEN + 1]; // String constant payload
     int level; // For variables and procedures
@@ -39,7 +39,7 @@ typedef struct {
 } SymbolTable;
 
 void initSymbolTable(void);
-void enter(char *name, ObjectType type, int value, int size, int isString);
+void enter(char *name, ObjectType type, double value, int size, int isString);
 Object* lookup(char *name);
 void enterBlock(void);
 void exitBlock(void);

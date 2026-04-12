@@ -30,7 +30,7 @@ typedef enum {
 typedef struct {
     OpCode op;
     int l; // Level
-    int a; // Address/Value/Operator
+    double a; // Address/Value/Operator (LIT uses floating-point payload)
 } Instruction;
 
 #define MAX_CODE_SIZE 1000
@@ -38,7 +38,7 @@ typedef struct {
 extern Instruction code[MAX_CODE_SIZE];
 extern int cx; // Code index
 
-void emit(OpCode op, int l, int a);
+void emit(OpCode op, int l, double a);
 void listCode(void);
 void optimizeCode(void);
 void interpret(void);

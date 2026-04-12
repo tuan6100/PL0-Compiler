@@ -1,7 +1,7 @@
 #ifndef SCANNER_H
 #define SCANNER_H
 
-#define MAX_NUMBER_LEN  6
+#define MAX_NUMBER_LEN  32
 #define MAX_IDENT_LEN   10
 #define KEYWORDS_COUNT  21
 #define MAX_STRING_LEN  255
@@ -25,6 +25,11 @@ typedef struct {
 extern const Keyword keywords[KEYWORDS_COUNT];
 
 extern const char TabToken[][12];
+
+extern double Num;
+extern int TokenLine;
+extern int TokenColumn;
+extern char CurrentSourceFile[260];
 
 extern char StringLiteral[MAX_STRING_LEN + 1];
 

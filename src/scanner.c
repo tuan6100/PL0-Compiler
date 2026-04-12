@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdlib.h>
 #include "scanner.h"
 
 #include "parser.h"
@@ -40,12 +41,19 @@ const char TabToken[][12] = {	"NONE", "IDENT", "NUMBER", "STRING",
 
 
 TokenType Token;
-int		  Num;
+double    Num;
+int       TokenLine = 1;
+int       TokenColumn = 1;
+char      CurrentSourceFile[260] = "<input>";
 char	  Id[MAX_IDENT_LEN + 1];
 char      StringLiteral[MAX_STRING_LEN + 1];
 
 FILE * f;
 int ch;
+static int curLine = 1;
+static int curColumn = 0;
+static int prevLine = 1;
+static int prevColumn = 0;
 
 TokenType checkKeyword(char * str){
 	for(int i = 0; i < KEYWORDS_COUNT; i++) {
@@ -57,7 +65,25 @@ TokenType checkKeyword(char * str){
 }
 
 int getCh() {
-  return fgetc(f);
+	prevLine = curLine;
+	prevColumn = curColumn;
+	int c = fgetc(f);
+	if (c == '\n') {
+		curLine++;
+		curColumn = 0;
+	} else if (c != EOF) {
+		curColumn++;
+	}
+	return c;
+}
+
+static void unreadCh(int c) {
+	if (c == EOF) {
+		return;
+	}
+	ungetc(c, f);
+	curLine = prevLine;
+	curColumn = prevColumn;
 }
 
 TokenType getToken() {
@@ -66,6 +92,8 @@ TokenType getToken() {
 	if (ch == EOF) {
 		return TK_NONE;
 	}
+	TokenLine = curLine;
+	TokenColumn = curColumn;
 	if(isalpha(ch) || ch == '_') {		//bat dau la mot chu cai hoac dau gach duoi
 		Id[0] = (char)toupper(ch);
 		int i = 0;
@@ -91,24 +119,47 @@ TokenType getToken() {
 		}
 		StringLiteral[i] = '\0';
 		if (ch != '"') {
-			printf("Unterminated string literal\n");
+			printf("Error at %s:%d:%d: Unterminated string literal\n", CurrentSourceFile, TokenLine, TokenColumn);
 			return TK_NONE;
 		}
 		ch = getCh();
 		return TK_STRING;
 	}
-	if( isdigit(ch)) {  //bat dau la mot chu so
-		Num = 0;
+	if (isdigit(ch)) {  // bat dau la mot chu so (int/float)
+		char numberBuf[MAX_NUMBER_LEN + 1];
 		int length = 0;
-		while(ch != EOF && isdigit(ch)) {
-			length++;
-			Num = Num * 10 + (ch - '0');
+		while (ch != EOF && isdigit(ch)) {
+			if (length < MAX_NUMBER_LEN) {
+				numberBuf[length++] = (char)ch;
+			}
 			ch = getCh();
 		}
+
+		if (ch == '.') {
+			int peek = getCh();
+			if (peek != EOF && isdigit(peek)) {
+				if (length < MAX_NUMBER_LEN) {
+					numberBuf[length++] = '.';
+				}
+				ch = peek;
+				while (ch != EOF && isdigit(ch)) {
+					if (length < MAX_NUMBER_LEN) {
+						numberBuf[length++] = (char)ch;
+					}
+					ch = getCh();
+				}
+			} else {
+				unreadCh(peek);
+			}
+		}
+
 		if (length > MAX_NUMBER_LEN) {
-			printf(" Number is too large\n");
+			printf("Error at %s:%d:%d: Number is too large\n", CurrentSourceFile, TokenLine, TokenColumn);
 			return TK_NONE;
 		}
+
+		numberBuf[length] = '\0';
+		Num = strtod(numberBuf, NULL);
 		return TK_NUMBER;
 	}
 	if (ch == ':') {
@@ -161,6 +212,14 @@ void compile(char * filename) {
 		printf("File %s not found\n", filename);
 		return;
 	}
+	strncpy(CurrentSourceFile, filename, sizeof(CurrentSourceFile) - 1);
+	CurrentSourceFile[sizeof(CurrentSourceFile) - 1] = '\0';
+	curLine = 1;
+	curColumn = 0;
+	prevLine = 1;
+	prevColumn = 0;
+	TokenLine = 1;
+	TokenColumn = 1;
 	ch = ' ';
 	nextToken();
 	program();

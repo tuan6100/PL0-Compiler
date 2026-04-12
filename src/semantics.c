@@ -11,7 +11,7 @@ void initSymbolTable(void) {
     symbolTable.count = 0;
 }
 
-void enter(char *name, ObjectType type, int value, int size, int isString) {
+void enter(char *name, ObjectType type, double value, int size, int isString) {
     // Check if the identifier is already declared in the current scope
     int startIdx = (currentLevel > 0) ? symbolTable.prev_count[currentLevel - 1] : 0;
     for (int i = startIdx; i < symbolTable.count; i++) {

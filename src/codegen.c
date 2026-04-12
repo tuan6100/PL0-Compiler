@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 #include "codegen.h"
 #include "parser.h"
 #include "scanner.h"
@@ -8,11 +9,19 @@ Instruction code[MAX_CODE_SIZE];
 int cx = 0;
 
 #define STACK_SIZE 5000
-int stack[STACK_SIZE];
+double stack[STACK_SIZE];
 
 #define MAX_STRING_LITERALS 128
 static char stringLiterals[MAX_STRING_LITERALS][MAX_STRING_LEN + 1];
 static int stringLiteralCount = 0;
+
+static int stackIndexFromValue(double v, const char *context) {
+    int idx = (int)v;
+    if ((double)idx != v) {
+        error(context);
+    }
+    return idx;
+}
 
 static void appendToStringAt(int dstAddr, const char *src) {
     if (dstAddr < 0 || dstAddr >= STACK_SIZE) {
@@ -55,7 +64,7 @@ int addStringLiteral(const char *literal) {
     return stringLiteralCount++;
 }
 
-void emit(OpCode op, int l, int a) {
+void emit(OpCode op, int l, double a) {
     if (cx >= MAX_CODE_SIZE) {
         error("code generation overflow");
     }
@@ -68,7 +77,7 @@ void emit(OpCode op, int l, int a) {
 void listCode(void) {
     printf("--- Code Generation ---\n");
     for (int i = 0; i < cx; i++) {
-        printf("%3d %-3s %d %d\n", i,
+        printf("%3d %-3s %d %g\n", i,
             code[i].op == LIT ? "LIT" :
                 code[i].op == OPR ? "OPR" :
                 code[i].op == LOD ? "LOD" :
@@ -99,10 +108,10 @@ void listCode(void) {
 void optimizeCode(void) {
     for (int i = 0; i < cx - 2; i++) {
         if (code[i].op == LIT && code[i+1].op == LIT && code[i+2].op == OPR) {
-            int val1 = code[i].a;
-            int val2 = code[i+1].a;
-            int op = code[i+2].a;
-            int result = 0;
+            double val1 = code[i].a;
+            double val2 = code[i+1].a;
+            int op = (int)code[i+2].a;
+            double result = 0.0;
             int foldable = 1;
             switch(op) {
                 case 2: result = val1 + val2; break; // +
@@ -127,7 +136,7 @@ void optimizeCode(void) {
 int base(int l, int b) {
     int bl = b;
     while (l > 0) {
-        bl = stack[bl];
+        bl = stackIndexFromValue(stack[bl], "invalid static link in stack frame");
         l--;
     }
     return bl;
@@ -147,18 +156,18 @@ void interpret(void) {
         switch (i.op) {
             case LIT: t++; stack[t] = i.a; break;
             case OPR:
-                switch (i.a) {
+                switch ((int)i.a) {
                     case 0: // return
                         t = b - 1;
-                        p = stack[t + 3];
-                        b = stack[t + 2];
+                        p = stackIndexFromValue(stack[t + 3], "invalid return address");
+                        b = stackIndexFromValue(stack[t + 2], "invalid dynamic link");
                         break;
                     case 1: stack[t] = -stack[t]; break; // negate
                     case 2: t--; stack[t] += stack[t+1]; break; // +
                     case 3: t--; stack[t] -= stack[t+1]; break; // -
                     case 4: t--; stack[t] *= stack[t+1]; break; // *
                     case 5: t--; stack[t] /= stack[t+1]; break; // /
-                    case 6: stack[t] = (stack[t] % 2 != 0); break; // odd
+                    case 6: stack[t] = (fmod(stack[t], 2.0) != 0.0); break; // odd
                     case 7: t--; stack[t] = (stack[t] == stack[t+1]); break; // ==
                     case 8: t--; stack[t] = (stack[t] != stack[t+1]); break; // !=
                     case 9: t--; stack[t] = (stack[t] <  stack[t+1]); break; // <
@@ -166,59 +175,59 @@ void interpret(void) {
                     case 11: t--; stack[t] = (stack[t] >  stack[t+1]); break; // >
                     case 12: t--; stack[t] = (stack[t] <= stack[t+1]); break; // <=
                     case 13: // print
-                        printf("%d\n", stack[t]);
+                        printf("%g\n", stack[t]);
                         t--;
                         break;
                 }
                 break;
-            case LOD: t++; stack[t] = stack[base(i.l, b) + i.a]; break;
-            case STO: stack[base(i.l, b) + i.a] = stack[t]; 
-                 t--; 
+            case LOD: t++; stack[t] = stack[base(i.l, b) + (int)i.a]; break;
+            case STO: stack[base(i.l, b) + (int)i.a] = stack[t];
+                 t--;
                  break;
             case LDA:
                 t++;
-                stack[t] = base(i.l, b) + i.a;
+                stack[t] = (double)(base(i.l, b) + (int)i.a);
                 break;
             case LDI:
-                stack[t] = stack[stack[t]];
+                stack[t] = stack[stackIndexFromValue(stack[t], "indirect load requires integer address")];
                 break;
             case STI:
-                stack[stack[t - 1]] = stack[t];
+                stack[stackIndexFromValue(stack[t - 1], "indirect store requires integer address")] = stack[t];
                 t -= 2;
                 break;
             case RDI: {
-                int value;
-                if (scanf("%d", &value) != 1) {
-                    error("READ failed: expected integer input");
+                double value;
+                if (scanf("%lf", &value) != 1) {
+                    error("READ failed: expected numeric input");
                 }
-                stack[stack[t]] = value;
+                stack[stackIndexFromValue(stack[t], "READ destination requires integer address")] = value;
                 t--;
                 break;
             }
             case WRI:
-                printf("%d", stack[t]);
+                printf("%g", stack[t]);
                 t--;
                 break;
             case WRS: {
-                int addr = base(i.l, b) + i.a;
+                int addr = base(i.l, b) + (int)i.a;
                 while (addr < STACK_SIZE && stack[addr] != 0) {
-                    putchar((char)stack[addr]);
+                    putchar((char)((unsigned char)stack[addr]));
                     addr++;
                 }
                 break;
             }
             case WRL:
-                if (i.a < 0 || i.a >= stringLiteralCount) {
+                if ((int)i.a < 0 || (int)i.a >= stringLiteralCount) {
                     error("invalid string literal reference");
                 }
-                printf("%s", stringLiterals[i.a]);
+                printf("%s", stringLiterals[(int)i.a]);
                 break;
             case STS: {
-                if (i.a < 0 || i.a >= stringLiteralCount) {
+                if ((int)i.a < 0 || (int)i.a >= stringLiteralCount) {
                     error("invalid string literal reference");
                 }
-                const char *src = stringLiterals[i.a];
-                int addr = stack[t--];
+                const char *src = stringLiterals[(int)i.a];
+                int addr = stackIndexFromValue(stack[t--], "STS destination requires integer address");
                 int k = 0;
                 while (k < MAX_STRING_LEN && src[k] != '\0') {
                     stack[addr + k] = (unsigned char)src[k];
@@ -231,7 +240,7 @@ void interpret(void) {
                 putchar('\n');
                 break;
             case SCLR: {
-                int addr = stack[t--];
+                int addr = stackIndexFromValue(stack[t--], "SCLR destination requires integer address");
                 if (addr < 0 || addr >= STACK_SIZE) {
                     error("SCLR address out of bounds");
                 }
@@ -239,38 +248,38 @@ void interpret(void) {
                 break;
             }
             case CATL: {
-                int addr = stack[t--];
-                if (i.a < 0 || i.a >= stringLiteralCount) {
+                int addr = stackIndexFromValue(stack[t--], "CATL destination requires integer address");
+                if ((int)i.a < 0 || (int)i.a >= stringLiteralCount) {
                     error("invalid string literal reference");
                 }
-                appendToStringAt(addr, stringLiterals[i.a]);
+                appendToStringAt(addr, stringLiterals[(int)i.a]);
                 break;
             }
             case CATV: {
-                int srcAddr = stack[t--];
-                int dstAddr = stack[t--];
+                int srcAddr = stackIndexFromValue(stack[t--], "CATV source requires integer address");
+                int dstAddr = stackIndexFromValue(stack[t--], "CATV destination requires integer address");
                 appendStringFromStack(dstAddr, srcAddr);
                 break;
             }
             case CATI: {
-                int value = stack[t--];
-                int dstAddr = stack[t--];
+                double value = stack[t--];
+                int dstAddr = stackIndexFromValue(stack[t--], "CATI destination requires integer address");
                 char temp[32];
-                sprintf(temp, "%d", value);
+                sprintf(temp, "%g", value);
                 appendToStringAt(dstAddr, temp);
                 break;
             }
             case RETV: {
-                int retValue = stack[t--];
+                double retValue = stack[t--];
                 t = b - 1;
-                p = stack[t + 3];
-                b = stack[t + 2];
+                p = stackIndexFromValue(stack[t + 3], "invalid return address");
+                b = stackIndexFromValue(stack[t + 2], "invalid dynamic link");
                 t++;
                 stack[t] = retValue;
                 break;
             }
             case LEN: {
-                int addr = stack[t];
+                int addr = stackIndexFromValue(stack[t], "LEN source requires integer address");
                 if (addr < 0 || addr >= STACK_SIZE) {
                     error("LEN address out of bounds");
                 }
@@ -286,11 +295,11 @@ void interpret(void) {
                 stack[t + 2] = b;
                 stack[t + 3] = p;
                 b = t + 1;
-                p = i.a;
+                p = (int)i.a;
                 break;
-            case INT: t += i.a; break;
-            case JMP: p = i.a; break;
-            case JPC: if (stack[t] == 0) p = i.a; t--; break;
+            case INT: t += (int)i.a; break;
+            case JMP: p = (int)i.a; break;
+            case JPC: if (stack[t] == 0) p = (int)i.a; t--; break;
         }
     } while (p != 0);
 }
