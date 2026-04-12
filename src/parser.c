@@ -23,6 +23,23 @@ static char pendingParamName[MAX_PROC_PARAMS][MAX_IDENT_LEN + 1];
 static int pendingParamLevel = -1;
 static Object *currentProcedure = NULL;
 
+#define MAX_INIT_EXPR_CODE 256
+#define MAX_ARRAY_INIT_VALUES 512
+
+typedef enum {
+    VAR_INIT_SCALAR_EXPR,
+    VAR_INIT_ARRAY_LITERAL
+} VarInitKind;
+
+typedef struct {
+    VarInitKind kind;
+    Object *target;
+    Instruction exprCode[MAX_INIT_EXPR_CODE];
+    int exprCount;
+    double arrayValues[MAX_ARRAY_INIT_VALUES];
+    int arrayCount;
+} PendingVarInit;
+
 static const char *interpExprPtr;
 
 static int tokenStartsStringValueExpr(void);
@@ -31,6 +48,38 @@ static void emitSizeOfObjectValue(const Object *obj);
 static void parseProcedureCallArguments(const Object *proc);
 static void formatCurrentTokenDetail(char *buf, size_t bufSize);
 static double parseVarInitializerValue(void);
+static double parseConstExpression(void);
+static Object *parseSizeOfTargetObject(int constMode);
+static void parseInitExpression(Instruction *buf, int *count, int maxCount);
+
+static void initEmit(Instruction *buf, int *count, int maxCount, OpCode op, int l, double a) {
+    if (*count >= maxCount) {
+        error("initializer expression is too complex");
+    }
+    buf[*count].op = op;
+    buf[*count].l = l;
+    buf[*count].a = a;
+    (*count)++;
+}
+
+static void initEmitLoadObjectValue(Instruction *buf, int *count, int maxCount, const Object *obj) {
+    int l = getCurrentLevel() - obj->level;
+    if (obj->isRefParam) {
+        initEmit(buf, count, maxCount, LOD, l, obj->address);
+        initEmit(buf, count, maxCount, LDI, 0, 0);
+    } else {
+        initEmit(buf, count, maxCount, LOD, l, obj->address);
+    }
+}
+
+static void initEmitLoadObjectAddress(Instruction *buf, int *count, int maxCount, const Object *obj) {
+    int l = getCurrentLevel() - obj->level;
+    if (obj->isRefParam) {
+        initEmit(buf, count, maxCount, LOD, l, obj->address);
+    } else {
+        initEmit(buf, count, maxCount, LDA, l, obj->address);
+    }
+}
 
 // ─── Tiện ích ────────────────────────────────────────────────────────────────
 
@@ -122,6 +171,276 @@ static double parseVarInitializerValue(void) {
     return 0;
 }
 
+static double parseConstFactor(void) {
+    if (Token == KW_SIZEOF) {
+        nextToken();
+        Object *obj = parseSizeOfTargetObject(1);
+        if (obj->type == OBJ_CONSTANT) {
+            if (obj->constIsString) {
+                return (double)strlen(obj->constString);
+            }
+            return 1;
+        }
+        if (obj->type == OBJ_VARIABLE || obj->type == OBJ_PARAMETER) {
+            if (obj->isString) {
+                return (double)((obj->size > 0) ? obj->size : 1);
+            }
+            if (obj->size > 1) {
+                return (double)obj->size;
+            }
+            return 1;
+        }
+        error("SIZEOF: procedure is not supported");
+        return 0;
+    }
+
+    if (Token == TK_NUMBER) {
+        double value = Num;
+        nextToken();
+        return value;
+    }
+
+    if (Token == TK_IDENT) {
+        Object *obj = lookup(Id);
+        char identName[MAX_IDENT_LEN + 1];
+        strcpy(identName, Id);
+        if (obj == NULL) {
+            char msg[120];
+            sprintf(msg, "CONST initializer undeclared identifier: %s", identName);
+            error(msg);
+        }
+        nextToken();
+        if (obj->type == OBJ_PROCEDURE) {
+            if (Token == SB_LPARENT) {
+                error("CONST initializer cannot call procedure");
+            }
+            error("CONST initializer requires numeric constant expression");
+        }
+        if (obj->type != OBJ_CONSTANT || obj->constIsString) {
+            error("CONST initializer requires numeric constant expression");
+        }
+        return obj->value;
+    }
+
+    if (Token == SB_LPARENT) {
+        nextToken();
+        double value = parseConstExpression();
+        expect(SB_RPARENT);
+        return value;
+    }
+
+    error("CONST initializer expects number, SIZEOF, identifier, or '(' expression ')' ");
+    return 0;
+}
+
+static double parseConstTerm(void) {
+    double value = parseConstFactor();
+    while (Token == SB_TIMES || Token == SB_SLASH) {
+        TokenType op = Token;
+        nextToken();
+        double rhs = parseConstFactor();
+        if (op == SB_TIMES) {
+            value *= rhs;
+        } else {
+            if (rhs == 0) {
+                error("CONST initializer division by zero");
+            }
+            value /= rhs;
+        }
+    }
+    return value;
+}
+
+static double parseConstExpression(void) {
+    TokenType prefix = TK_NONE;
+    if (Token == SB_PLUS || Token == SB_MINUS) {
+        prefix = Token;
+        nextToken();
+    }
+
+    double value = parseConstTerm();
+    if (prefix == SB_MINUS) {
+        value = -value;
+    }
+
+    while (Token == SB_PLUS || Token == SB_MINUS) {
+        TokenType op = Token;
+        nextToken();
+        double rhs = parseConstTerm();
+        value = (op == SB_PLUS) ? (value + rhs) : (value - rhs);
+    }
+    return value;
+}
+
+static Object *parseSizeOfTargetObject(int constMode) {
+    expect(SB_LPARENT);
+    if (Token != TK_IDENT) {
+        error("SIZEOF: expected identifier");
+    }
+    Object *obj = lookup(Id);
+    if (obj == NULL) {
+        char msg[120];
+        sprintf(msg, "SIZEOF: undeclared identifier %s", Id);
+        error(msg);
+    }
+    nextToken();
+
+    if (Token == SB_LBRACK) {
+        if (constMode) {
+            nextToken();
+            (void)parseConstExpression();
+            expect(SB_RBRACK);
+        } else {
+            int depth = 1;
+            nextToken();
+            while (depth > 0) {
+                if (Token == TK_NONE) {
+                    error("SIZEOF: missing ']' ");
+                }
+                if (Token == SB_LBRACK) {
+                    depth++;
+                } else if (Token == SB_RBRACK) {
+                    depth--;
+                }
+                nextToken();
+            }
+        }
+    }
+
+    expect(SB_RPARENT);
+    return obj;
+}
+
+static void parseInitFactor(Instruction *buf, int *count, int maxCount) {
+    if (Token == TK_NUMBER) {
+        initEmit(buf, count, maxCount, LIT, 0, Num);
+        nextToken();
+        return;
+    }
+
+    if (Token == KW_SIZEOF) {
+        nextToken();
+        expect(SB_LPARENT);
+        if (Token != TK_IDENT) {
+            error("SIZEOF initializer: expected identifier");
+        }
+        Object *obj = lookup(Id);
+        if (obj == NULL) {
+            char msg[120];
+            sprintf(msg, "SIZEOF initializer: undeclared identifier %s", Id);
+            error(msg);
+        }
+        nextToken();
+        expect(SB_RPARENT);
+        if (obj->type == OBJ_CONSTANT) {
+            if (obj->constIsString) {
+                initEmit(buf, count, maxCount, LIT, 0, (double)strlen(obj->constString));
+            } else {
+                initEmit(buf, count, maxCount, LIT, 0, 1);
+            }
+        } else if (obj->type == OBJ_VARIABLE || obj->type == OBJ_PARAMETER) {
+            if (obj->isString) {
+                initEmit(buf, count, maxCount, LIT, 0, obj->size > 0 ? obj->size : 1);
+            } else if (obj->size > 1) {
+                initEmit(buf, count, maxCount, LIT, 0, obj->size);
+            } else {
+                initEmit(buf, count, maxCount, LIT, 0, 1);
+            }
+        } else {
+            error("SIZEOF initializer: procedure is not supported");
+        }
+        return;
+    }
+
+    if (Token == TK_IDENT) {
+        Object *obj = lookup(Id);
+        if (obj == NULL) {
+            char msg[120];
+            sprintf(msg, "initializer undeclared identifier: %s", Id);
+            error(msg);
+        }
+
+        if (obj->type == OBJ_PROCEDURE) {
+            nextToken();
+            parseProcedureCallArguments(obj);
+            if (!obj->hasReturnValue) {
+                error("initializer procedure does not return a value");
+            }
+            initEmit(buf, count, maxCount, CAL, getCurrentLevel() - obj->level, obj->address);
+            return;
+        }
+
+        if (obj->type == OBJ_CONSTANT) {
+            if (obj->constIsString) {
+                error("initializer does not support STRING constant");
+            }
+            initEmit(buf, count, maxCount, LIT, 0, obj->value);
+            nextToken();
+            return;
+        }
+
+        if (obj->isString) {
+            error("initializer does not support STRING variable");
+        }
+
+        nextToken();
+        if (Token == SB_LBRACK) {
+            if (obj->size <= 1) {
+                error("initializer indexed access requires array variable");
+            }
+            initEmitLoadObjectAddress(buf, count, maxCount, obj);
+            nextToken();
+            parseInitExpression(buf, count, maxCount);
+            expect(SB_RBRACK);
+            initEmit(buf, count, maxCount, OPR, 0, 2);
+            initEmit(buf, count, maxCount, LDI, 0, 0);
+        } else {
+            if (obj->size > 1) {
+                error("initializer array variable requires an index");
+            }
+            initEmitLoadObjectValue(buf, count, maxCount, obj);
+        }
+        return;
+    }
+
+    if (Token == SB_LPARENT) {
+        nextToken();
+        parseInitExpression(buf, count, maxCount);
+        expect(SB_RPARENT);
+        return;
+    }
+
+    error("initializer: expected number, identifier, or '(' ");
+}
+
+static void parseInitTerm(Instruction *buf, int *count, int maxCount) {
+    parseInitFactor(buf, count, maxCount);
+    while (Token == SB_TIMES || Token == SB_SLASH) {
+        TokenType op = Token;
+        nextToken();
+        parseInitFactor(buf, count, maxCount);
+        initEmit(buf, count, maxCount, OPR, 0, op == SB_TIMES ? 4 : 5);
+    }
+}
+
+static void parseInitExpression(Instruction *buf, int *count, int maxCount) {
+    TokenType prefix = TK_NONE;
+    if (Token == SB_PLUS || Token == SB_MINUS) {
+        prefix = Token;
+        nextToken();
+    }
+    parseInitTerm(buf, count, maxCount);
+    if (prefix == SB_MINUS) {
+        initEmit(buf, count, maxCount, OPR, 0, 1);
+    }
+    while (Token == SB_PLUS || Token == SB_MINUS) {
+        TokenType op = Token;
+        nextToken();
+        parseInitTerm(buf, count, maxCount);
+        initEmit(buf, count, maxCount, OPR, 0, op == SB_PLUS ? 2 : 3);
+    }
+}
+
 static int isAssignableObject(const Object *obj) {
     return obj->type == OBJ_VARIABLE || obj->type == OBJ_PARAMETER;
 }
@@ -172,9 +491,8 @@ static void emitSizeOfObjectValue(const Object *obj) {
             emitLoadObjectAddress(obj);
             emit(LEN, 0, 0);
         } else if (obj->size > 1) {
-            // Logical array length convention: first cell stores length.
-            emitLoadObjectAddress(obj);
-            emit(LDI, 0, 0);
+            // C-like behavior: SIZEOF(array) returns declared element count.
+            emit(LIT, 0, obj->size);
         } else {
             emit(LIT, 0, 1);
         }
@@ -194,27 +512,40 @@ static void parseProcedureCallArguments(const Object *proc) {
                 }
                 if (proc->paramIsRef[argCount]) {
                     if (Token != TK_IDENT) {
-                        error("VAR parameter requires an identifier argument");
+                        error("VAR parameter requires assignable identifier argument");
                     }
                     Object *arg = lookup(Id);
                     if (arg == NULL || !isAssignableObject(arg) || arg->isString) {
                         error("VAR parameter requires variable argument");
                     }
-                    if (proc->paramSize[argCount] > 1) {
-                        if (arg->size <= 1) {
-                            error("Array parameter requires array argument");
-                        }
-                    } else {
-                        if (arg->size != 1) {
-                            error("Scalar VAR parameter requires scalar argument");
-                        }
-                    }
-                    if (arg->isRefParam) {
-                        emit(LOD, getCurrentLevel() - arg->level, arg->address);
-                    } else {
-                        emit(LDA, getCurrentLevel() - arg->level, arg->address);
-                    }
                     nextToken();
+
+                    int indexedArg = 0;
+                    if (Token == SB_LBRACK) {
+                        indexedArg = 1;
+                        if (arg->size <= 1) {
+                            error("Indexed VAR argument requires array variable");
+                        }
+                        emitLoadObjectAddress(arg);
+                        nextToken();
+                        expression();
+                        expect(SB_RBRACK);
+                        emit(OPR, 0, 2);
+                    }
+
+                    if (proc->paramSize[argCount] > 1) {
+                        if (indexedArg || arg->size <= 1) {
+                            error("Array parameter requires array variable argument");
+                        }
+                        emitLoadObjectAddress(arg);
+                    } else {
+                        if (!indexedArg && arg->size != 1) {
+                            error("Scalar VAR parameter requires scalar variable or indexed array element");
+                        }
+                        if (!indexedArg) {
+                            emitLoadObjectAddress(arg);
+                        }
+                    }
                 } else {
                     if (proc->paramSize[argCount] > 1) {
                         error("Array parameter must be passed by VAR/reference");
@@ -647,18 +978,7 @@ void factor(void) {
         nextToken();
     } else if (Token == KW_SIZEOF) {
         nextToken();
-        expect(SB_LPARENT);
-        if (Token != TK_IDENT) {
-            error("SIZEOF: expected identifier");
-        }
-        Object *obj = lookup(Id);
-        if (obj == NULL) {
-            char msg[120];
-            sprintf(msg, "SIZEOF: undeclared identifier %s", Id);
-            error(msg);
-        }
-        nextToken();
-        expect(SB_RPARENT);
+        Object *obj = parseSizeOfTargetObject(0);
         emitSizeOfObjectValue(obj);
         return;
     } else if (Token == TK_IDENT) {
@@ -877,13 +1197,21 @@ static void emitInterpolatedString(const char *literal) {
 //           | (rỗng)
 void statement(void) {
     if (Token == TK_IDENT) {
-        // Gán: IDENT ':=' expression
+        // Allow implicit procedure call syntax: IDENT(...)
         Object* obj = lookup(Id);
         if (obj == NULL) {
             char msg[100];
             sprintf(msg, "Undeclared identifier: %s", Id);
             error(msg);
         }
+        if (obj->type == OBJ_PROCEDURE) {
+            nextToken();
+            parseProcedureCallArguments(obj);
+            emit(CAL, getCurrentLevel() - obj->level, obj->address);
+            return;
+        }
+
+        // Gán: IDENT ':=' expression
         if (!isAssignableObject(obj)) {
             error("Cannot assign to non-variable");
         }
@@ -1101,8 +1429,7 @@ void block(void) {
     enterBlock();
     int tx0 = cx;
     emit(JMP, 0, 0);
-    Object *pendingInitObj[MAX_SYMBOL_TABLE_SIZE];
-    double pendingInitValue[MAX_SYMBOL_TABLE_SIZE];
+    PendingVarInit pendingInit[MAX_SYMBOL_TABLE_SIZE];
     int pendingInitCount = 0;
 
     if (pendingParamCount > 0 && getCurrentLevel() == pendingParamLevel) {
@@ -1126,11 +1453,11 @@ void block(void) {
                 char name[MAX_IDENT_LEN + 1];
                 strcpy(name, Id);
                 nextToken();
-                expect(SB_EQU);
-                if (Token == TK_NUMBER) {
-                    enter(name, OBJ_CONSTANT, Num, 0, 0);
-                    nextToken();
-                } else if (Token == TK_STRING) {
+                if (Token != SB_EQU && Token != SB_ASSIGN) {
+                    error("block: expected '=' or ':=' in CONST");
+                }
+                nextToken();
+                if (Token == TK_STRING) {
                     enter(name, OBJ_CONSTANT, 0, 0, 0);
                     Object *obj = lookup(name);
                     obj->constIsString = 1;
@@ -1138,7 +1465,8 @@ void block(void) {
                     obj->constString[MAX_STRING_LEN] = '\0';
                     nextToken();
                 } else {
-                    error("block: expected number or string in CONST");
+                    double value = parseConstExpression();
+                    enter(name, OBJ_CONSTANT, value, 0, 0);
                 }
                 if (Token == SB_COMMA) nextToken(); else break;
             } while (1);
@@ -1166,15 +1494,48 @@ void block(void) {
                 enter(varName, OBJ_VARIABLE, 0, size, 0);
 
                 if (Token == SB_EQU || Token == SB_ASSIGN) {
-                    if (size > 1) {
-                        error("VAR initializer currently supports only scalar variables");
-                    }
                     nextToken();
                     if (pendingInitCount >= MAX_SYMBOL_TABLE_SIZE) {
                         error("too many variable initializers in block");
                     }
-                    pendingInitObj[pendingInitCount] = lookup(varName);
-                    pendingInitValue[pendingInitCount] = parseVarInitializerValue();
+
+                    pendingInit[pendingInitCount].target = lookup(varName);
+                    pendingInit[pendingInitCount].exprCount = 0;
+                    pendingInit[pendingInitCount].arrayCount = 0;
+
+                    if (size > 1) {
+                        if (Token != SB_LBRACK) {
+                            error("Array initializer must use bracket list, e.g. VAR A[4] := [1,2]");
+                        }
+                        pendingInit[pendingInitCount].kind = VAR_INIT_ARRAY_LITERAL;
+                        nextToken();
+                        if (Token != SB_RBRACK) {
+                            while (1) {
+                                if (pendingInit[pendingInitCount].arrayCount >= MAX_ARRAY_INIT_VALUES) {
+                                    error("array initializer is too long");
+                                }
+                                pendingInit[pendingInitCount].arrayValues[pendingInit[pendingInitCount].arrayCount++] = parseVarInitializerValue();
+                                if (Token == SB_COMMA) {
+                                    nextToken();
+                                    continue;
+                                }
+                                break;
+                            }
+                        }
+                        expect(SB_RBRACK);
+                        if (pendingInit[pendingInitCount].arrayCount > size) {
+                            error("array initializer has more elements than declared size");
+                        }
+                        if (pendingInit[pendingInitCount].target != NULL) {
+                            pendingInit[pendingInitCount].target->initSize = pendingInit[pendingInitCount].arrayCount;
+                        }
+                    } else {
+                        pendingInit[pendingInitCount].kind = VAR_INIT_SCALAR_EXPR;
+                        parseInitExpression(pendingInit[pendingInitCount].exprCode,
+                                            &pendingInit[pendingInitCount].exprCount,
+                                            MAX_INIT_EXPR_CODE);
+                    }
+
                     pendingInitCount++;
                 }
 
@@ -1248,19 +1609,34 @@ void block(void) {
 
         expect(SB_SEMICOLON);
         int procEntry = cx;
+        // Publish entry point early so recursive calls inside this block resolve correctly.
+        obj->address = procEntry;
         Object *savedProcedure = currentProcedure;
         currentProcedure = obj;
         block();
         currentProcedure = savedProcedure;
-        obj->address = procEntry;
         expect(SB_SEMICOLON);
     }
 
     code[tx0].a = cx;
     emit(INT, 0, getVarCount() + 3);
     for (int i = 0; i < pendingInitCount; i++) {
-        emit(LIT, 0, pendingInitValue[i]);
-        emit(STO, getCurrentLevel() - pendingInitObj[i]->level, pendingInitObj[i]->address);
+        if (pendingInit[i].kind == VAR_INIT_SCALAR_EXPR) {
+            for (int k = 0; k < pendingInit[i].exprCount; k++) {
+                emit(pendingInit[i].exprCode[k].op,
+                     pendingInit[i].exprCode[k].l,
+                     pendingInit[i].exprCode[k].a);
+            }
+            emitStoreObjectValue(pendingInit[i].target);
+        } else {
+            for (int k = 0; k < pendingInit[i].arrayCount; k++) {
+                emitLoadObjectAddress(pendingInit[i].target);
+                emit(LIT, 0, k);
+                emit(OPR, 0, 2);
+                emit(LIT, 0, pendingInit[i].arrayValues[k]);
+                emit(STI, 0, 0);
+            }
+        }
     }
     statement();
     emit(OPR, 0, 0); // Return
@@ -1284,9 +1660,9 @@ void program(void) {
     if (Token != TK_NONE) {
         error("program: unexpected token after '.'");
     }
-    // listCode();
-    optimizeCode();
-    // listCode();
+    // The current optimizer does not retarget jumps after folding,
+    // which can corrupt loop/branch control flow. Keep execution unoptimized.
+    // optimizeCode();
     interpret();
 }
 
