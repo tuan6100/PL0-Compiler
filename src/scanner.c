@@ -119,7 +119,7 @@ TokenType getToken() {
 		}
 		StringLiteral[i] = '\0';
 		if (ch != '"') {
-			printf("Error at %s:%d:%d: Unterminated string literal\n", CurrentSourceFile, TokenLine, TokenColumn);
+			printf("Error at %s: %d:%d: Unterminated string literal\n", CurrentSourceFile, TokenLine, TokenColumn);
 			return TK_NONE;
 		}
 		ch = getCh();

@@ -45,7 +45,7 @@ void nextToken(void) {
 void error(const char msg[]) {
     char tokenDetail[320];
     formatCurrentTokenDetail(tokenDetail, sizeof(tokenDetail));
-    printf("Error at %s:%d:%d: %s%s\n",
+    printf("Error at %s: %d:%d: %s%s\n",
            CurrentSourceFile,
            TokenLine,
            TokenColumn,
@@ -1165,7 +1165,7 @@ void block(void) {
                 }
                 enter(varName, OBJ_VARIABLE, 0, size, 0);
 
-                if (Token == SB_EQU) {
+                if (Token == SB_EQU || Token == SB_ASSIGN) {
                     if (size > 1) {
                         error("VAR initializer currently supports only scalar variables");
                     }
@@ -1214,12 +1214,18 @@ void block(void) {
                     nextToken();
                     if (Token == SB_LBRACK) {
                         nextToken();
-                        if (Token != TK_NUMBER || Num <= 0) {
-                            error("procedure parameter array size must be a positive number");
+                        if (Token == SB_RBRACK) {
+                            // Unsized formal array parameter: VAR ARR[]
+                            paramSize = 2;
+                            nextToken();
+                        } else {
+                            if (Token != TK_NUMBER || Num <= 0) {
+                                error("procedure parameter array size must be a positive number");
+                            }
+                            paramSize = (int)Num;
+                            nextToken();
+                            expect(SB_RBRACK);
                         }
-                        paramSize = (int)Num;
-                        nextToken();
-                        expect(SB_RBRACK);
                         isRef = 1;
                     }
                     pendingParamIsRef[pendingParamCount] = isRef;
