@@ -270,6 +270,34 @@ static int interpAccept(char c) {
 
 static void interpParseExpression(void);
 
+static double interpParseNumberLiteral(void) {
+    char buf[64];
+    int n = 0;
+
+    while (isdigit((unsigned char)*interpExprPtr)) {
+        if (n < (int)sizeof(buf) - 1) {
+            buf[n++] = *interpExprPtr;
+        }
+        interpExprPtr++;
+    }
+
+    if (*interpExprPtr == '.' && isdigit((unsigned char)interpExprPtr[1])) {
+        if (n < (int)sizeof(buf) - 1) {
+            buf[n++] = *interpExprPtr;
+        }
+        interpExprPtr++;
+        while (isdigit((unsigned char)*interpExprPtr)) {
+            if (n < (int)sizeof(buf) - 1) {
+                buf[n++] = *interpExprPtr;
+            }
+            interpExprPtr++;
+        }
+    }
+
+    buf[n] = '\0';
+    return strtod(buf, NULL);
+}
+
 static void interpParseProcedureCallArgs(const Object *proc) {
     int argCount = 0;
     if (!interpAccept('(')) {
@@ -322,12 +350,7 @@ static void interpParseFactor(void) {
     }
 
     if (isdigit((unsigned char)*interpExprPtr)) {
-        int value = 0;
-        while (isdigit((unsigned char)*interpExprPtr)) {
-            value = value * 10 + (*interpExprPtr - '0');
-            interpExprPtr++;
-        }
-        emit(LIT, 0, value);
+        emit(LIT, 0, interpParseNumberLiteral());
         return;
     }
 
