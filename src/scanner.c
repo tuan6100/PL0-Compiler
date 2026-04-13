@@ -7,6 +7,7 @@
 #include "parser.h"
 
 const Keyword keywords[KEYWORDS_COUNT] = {
+	{"AND", KW_AND},
 	{"BEGIN", KW_BEGIN},
 	{"CALL", KW_CALL},
 	{"CONST", KW_CONST},
@@ -15,7 +16,9 @@ const Keyword keywords[KEYWORDS_COUNT] = {
 	{"END", KW_END},
   {"FOR", KW_FOR},
 	 {"IF", KW_IF},
+  {"NOT", KW_NOT},
    {"ODD",KW_ODD},
+  {"OR", KW_OR},
 	{"PROCEDURE", KW_PROCEDURE},
   {"PROGRAM", KW_PROGRAM},
   {"READ", KW_READ},
@@ -33,9 +36,10 @@ const Keyword keywords[KEYWORDS_COUNT] = {
 const char TabToken[][12] = {	"NONE", "IDENT", "NUMBER", "STRING",
 		"BEGIN", "CALL", "CONST", "DO",  "ELSE", "END", "FOR", "IF",
 		"ODD", "PROCEDURE", "PROGRAM", "READ", "RETURN", "SIZEOF", "THEN", "TO", "VAR", "WHILE", "WRITE", "WRITELN",
+		"AND", "OR", "NOT",
 
 		"PLUS", "MINUS", "TIMES", "SLASH", "EQU", "NEQ", "LSS",
-		"LEQ", "GTR", "GEQ", "PERCENT", "LPARENT", "RPARENT",
+		"LEQ", "GTR", "GEQ", "PERCENT", "BITAND", "BITOR", "BITXOR", "BITNOT", "SHL", "SHR", "INC", "LPARENT", "RPARENT",
 		"LBRACK", "RBRACK", "PERIOD", "COMMA", "SEMICOLON", "ASSIGN"
 	};
 
@@ -171,11 +175,18 @@ TokenType getToken() {
 		return TK_NONE;
 	}
 	switch(ch){
-	case '+': ch = getCh(); return SB_PLUS;
+	case '+':
+		ch = getCh();
+		if (ch == '+') {
+			ch = getCh();
+			return SB_INC;
+		}
+		return SB_PLUS;
 	case '-': ch = getCh(); return SB_MINUS;
 	case '*': ch = getCh(); return SB_TIMES;
 	case '/': ch = getCh(); return SB_SLASH;
 	case '=': ch = getCh(); return SB_EQU;
+	case '!': ch = getCh(); return KW_NOT;
 	case '<':
 		ch = getCh();
 		if (ch == '=') {
@@ -184,6 +195,9 @@ TokenType getToken() {
 		} else if (ch == '>') {
 			ch = getCh();
 			return SB_NEQ;
+		} else if (ch == '<') {
+			ch = getCh();
+			return SB_SHL;
 		}
 		return SB_LSS;
 	case '>':
@@ -191,9 +205,16 @@ TokenType getToken() {
 		if (ch == '=') {
 			ch = getCh();
 			return SB_GEQ;
+		} else if (ch == '>') {
+			ch = getCh();
+			return SB_SHR;
 		}
 		return SB_GTR;
 	case '%': ch = getCh(); return SB_PERCENT;
+	case '&': ch = getCh(); return SB_BITAND;
+	case '|': ch = getCh(); return SB_BITOR;
+	case '^': ch = getCh(); return SB_BITXOR;
+	case '~': ch = getCh(); return SB_BITNOT;
 	case '(': ch = getCh(); return SB_LPARENT;
 	case ')': ch = getCh(); return SB_RPARENT;
 	case '[': ch = getCh(); return SB_LBRACK;

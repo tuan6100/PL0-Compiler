@@ -21,6 +21,8 @@ typedef struct {
     int level; // For variables and procedures
     int address; // For code generation (future)
     int size; // Number of stack cells used by this symbol (variables only)
+    int isRuntimeArray; // 1 when variable is runtime-sized array descriptor
+    int lengthAddress; // Descriptor slot for runtime array length
     int initSize; // Initialized element count for arrays (0 when not set)
     int isString; // 1 for STRING declarations, 0 otherwise
     int isRefParam; // 1 when this symbol is a VAR parameter

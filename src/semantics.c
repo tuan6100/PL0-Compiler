@@ -35,6 +35,8 @@ void enter(char *name, ObjectType type, double value, int size, int isString) {
     obj->constString[0] = '\0';
     obj->level = currentLevel;
     obj->size = ((type == OBJ_VARIABLE || type == OBJ_PARAMETER) && size > 0) ? size : 0;
+    obj->isRuntimeArray = 0;
+    obj->lengthAddress = -1;
     obj->initSize = 0;
     obj->isString = (type == OBJ_VARIABLE || type == OBJ_PARAMETER) ? isString : 0;
     obj->isRefParam = 0;

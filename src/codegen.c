@@ -99,6 +99,8 @@ void listCode(void) {
                 code[i].op == CATL ? "CTL" :
                 code[i].op == CATV ? "CTV" :
                 code[i].op == CATI ? "CTI" :
+                code[i].op == DUP ? "DUP" :
+                code[i].op == ALC ? "ALC" :
                 code[i].op == RETV ? "RTV" : "LEN",
             code[i].l, code[i].a);
     }
@@ -174,9 +176,72 @@ void interpret(void) {
                     case 10: t--; stack[t] = (stack[t] >= stack[t+1]); break; // >=
                     case 11: t--; stack[t] = (stack[t] >  stack[t+1]); break; // >
                     case 12: t--; stack[t] = (stack[t] <= stack[t+1]); break; // <=
-                    case 13: // print
-                        printf("%g\n", stack[t]);
+                    case 13: { // bitwise OR
+                        int rhs = stackIndexFromValue(stack[t], "bitwise OR requires integer operands");
+                        int lhs = stackIndexFromValue(stack[t - 1], "bitwise OR requires integer operands");
                         t--;
+                        stack[t] = (double)(lhs | rhs);
+                        break;
+                    }
+                    case 14: { // modulo
+                        int rhs = stackIndexFromValue(stack[t], "modulo requires integer operands");
+                        int lhs = stackIndexFromValue(stack[t - 1], "modulo requires integer operands");
+                        if (rhs == 0) {
+                            error("modulo by zero");
+                        }
+                        t--;
+                        stack[t] = (double)(lhs % rhs);
+                        break;
+                    }
+                    case 15: { // bitwise AND
+                        int rhs = stackIndexFromValue(stack[t], "bitwise AND requires integer operands");
+                        int lhs = stackIndexFromValue(stack[t - 1], "bitwise AND requires integer operands");
+                        t--;
+                        stack[t] = (double)(lhs & rhs);
+                        break;
+                    }
+                    case 16: { // bitwise XOR
+                        int rhs = stackIndexFromValue(stack[t], "bitwise XOR requires integer operands");
+                        int lhs = stackIndexFromValue(stack[t - 1], "bitwise XOR requires integer operands");
+                        t--;
+                        stack[t] = (double)(lhs ^ rhs);
+                        break;
+                    }
+                    case 17: { // bitwise NOT
+                        int value = stackIndexFromValue(stack[t], "bitwise NOT requires integer operand");
+                        stack[t] = (double)(~value);
+                        break;
+                    }
+                    case 18: { // shift left
+                        int rhs = stackIndexFromValue(stack[t], "shift-left requires integer operands");
+                        int lhs = stackIndexFromValue(stack[t - 1], "shift-left requires integer operands");
+                        if (rhs < 0) {
+                            error("shift-left count must be non-negative");
+                        }
+                        t--;
+                        stack[t] = (double)(lhs << rhs);
+                        break;
+                    }
+                    case 19: { // shift right
+                        int rhs = stackIndexFromValue(stack[t], "shift-right requires integer operands");
+                        int lhs = stackIndexFromValue(stack[t - 1], "shift-right requires integer operands");
+                        if (rhs < 0) {
+                            error("shift-right count must be non-negative");
+                        }
+                        t--;
+                        stack[t] = (double)(lhs >> rhs);
+                        break;
+                    }
+                    case 20: // logical AND
+                        t--;
+                        stack[t] = (stack[t] != 0.0 && stack[t + 1] != 0.0);
+                        break;
+                    case 21: // logical OR
+                        t--;
+                        stack[t] = (stack[t] != 0.0 || stack[t + 1] != 0.0);
+                        break;
+                    case 22: // logical NOT
+                        stack[t] = (stack[t] == 0.0);
                         break;
                 }
                 break;
@@ -267,6 +332,28 @@ void interpret(void) {
                 char temp[32];
                 sprintf(temp, "%g", value);
                 appendToStringAt(dstAddr, temp);
+                break;
+            }
+            case DUP:
+                t++;
+                stack[t] = stack[t - 1];
+                break;
+            case ALC: {
+                int len = stackIndexFromValue(stack[t], "VLA length must be an integer");
+                t--;
+                if (len <= 0) {
+                    error("VLA length must be positive");
+                }
+                int baseAddr = t + 1;
+                if (baseAddr + len >= STACK_SIZE) {
+                    error("VLA allocation exceeds stack capacity");
+                }
+                for (int k = 0; k < len; k++) {
+                    stack[baseAddr + k] = 0;
+                }
+                t += len;
+                t++;
+                stack[t] = (double)baseAddr;
                 break;
             }
             case RETV: {
