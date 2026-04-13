@@ -1567,8 +1567,8 @@ void statement(void) {
         code[cx2].a = cx;
 
     } else if (Token == KW_FOR) {
-        // Vòng lặp: FOR IDENT ':=' expression TO expression DO statement
-        // Tương đương: i := expr1; while i <= expr2 do begin statement; i := i + 1; end
+        // FOR IDENT ':=' expr (TO|DOWNTO) expr [STEP expr] DO statement
+        // STEP defaults to 1. Bound/step expressions are re-evaluated each iteration.
         nextToken();
         if (Token != TK_IDENT) error("statement: expected identifier after FOR");
         Object* obj = lookup(Id);
@@ -1579,19 +1579,48 @@ void statement(void) {
         expect(SB_ASSIGN);
         expression();
         emit(STO, getCurrentLevel() - obj->level, obj->address);
-        expect(KW_TO);
+
+        int isDownTo = 0;
+        if (Token == KW_TO) {
+            isDownTo = 0;
+            nextToken();
+        } else if (Token == KW_DOWNTO) {
+            isDownTo = 1;
+            nextToken();
+        } else {
+            error("FOR: expected TO or DOWNTO");
+        }
+
+        Instruction boundExpr[MAX_INIT_EXPR_CODE];
+        int boundExprCount = 0;
+        parseInitExpression(boundExpr, &boundExprCount, MAX_INIT_EXPR_CODE);
+
+        Instruction stepExpr[MAX_INIT_EXPR_CODE];
+        int stepExprCount = 0;
+        if (Token == KW_STEP) {
+            nextToken();
+            parseInitExpression(stepExpr, &stepExprCount, MAX_INIT_EXPR_CODE);
+        } else {
+            initEmit(stepExpr, &stepExprCount, MAX_INIT_EXPR_CODE, LIT, 0, 1);
+        }
+
         int cx1 = cx;
         emit(LOD, getCurrentLevel() - obj->level, obj->address);
-        expression();
-        emit(OPR, 0, 12); // <=
+        for (int i = 0; i < boundExprCount; i++) {
+            emit(boundExpr[i].op, boundExpr[i].l, boundExpr[i].a);
+        }
+        emit(OPR, 0, isDownTo ? 10 : 12); // >= or <=
         int cx2 = cx;
         emit(JPC, 0, 0);
         expect(KW_DO);
         statement();
-        // Increment i
+
+        // i := i +/- step
         emit(LOD, getCurrentLevel() - obj->level, obj->address);
-        emit(LIT, 0, 1);
-        emit(OPR, 0, 2); // +
+        for (int i = 0; i < stepExprCount; i++) {
+            emit(stepExpr[i].op, stepExpr[i].l, stepExpr[i].a);
+        }
+        emit(OPR, 0, isDownTo ? 3 : 2); // - or +
         emit(STO, getCurrentLevel() - obj->level, obj->address);
         emit(JMP, 0, cx1);
         code[cx2].a = cx;

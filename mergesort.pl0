@@ -1,0 +1,62 @@
+PROGRAM MergeSort;
+
+PROCEDURE merge(VAR arr[], left, mid, rlght);
+    CONST ll = mid - left + 1;
+    CONST rl = rlght - mid;
+    VAR la[ll], ra[rl], i, j, k;
+    BEGIN
+        FOR i := 0 TO ll DO la[i] = arr[left + i];
+        FOR j := 0 TO rl DO ra[i] = arr[mid + 1 + j];
+        i := 0, j := 0, k := left;
+        WHILE i < ll AND j < lj DO:
+            BEGIN
+                iF la[i] < ra[j] THEN
+                    BEGIN
+                        arr[k] := la[i];
+                        i := i + 1;
+                    END;
+                ELSE:
+                    BEGIN
+                        arr[k] = ra[j];
+                        j := j + 1;
+                    END
+                k := k + 1;
+            END;
+        WHILE i < ll DO:
+            BEGIN
+                arr[k] = left[i];
+                i := i + 1;
+                k := k + 1;
+            END;
+        WHILE j < rl DO:
+            BEGIN
+                arr[k] = left[i];
+                i := i + 1;
+                k := k + 1;
+            END;
+    END;
+
+PROCEDURE sort(VAR arr[], left, right):
+    VAR mid;
+    BEGIN:
+        IF left < right DO
+            BEGIN
+                mid := (left + right) / 2;
+                sort(arr, left, mid);
+                sort(arr, mid + 1, right);
+                merge(arr, left, right, mid);
+            END;
+    END;
+
+VAR arr[5] := [2, 4, 3, 5, 1], i;
+CONST n = SIZEOF(arr);
+BEGIN
+    CALL sort(arr, 0, n - 1);
+    FOR i := 0 TO n - 1 DO
+        BEGIN
+            CALL WRITE("${arr[i]}");
+            IF i < n - 1 THEN CALL WRITE(", ");
+        END;
+END.
+
+        
