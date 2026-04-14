@@ -60,6 +60,14 @@ static double parseVarInitializerValue(void);
 static double parseConstExpression(void);
 static Object *parseSizeOfTargetObject(int constMode);
 static void parseInitExpression(Instruction *buf, int *count, int maxCount);
+static void emitLoadObjectAddress(const Object *obj);
+static void parseConstArrayLiteralValues(double *values, int *count, int maxCount);
+static void parseVarArrayLiteralValues(double *values, int *count, int maxCount);
+static int expectedArrayDims(const Object *obj);
+static int isArrayLikeObject(const Object *obj);
+static int emitIndexedAddress(const Object *obj, int requireIndex, int requireFullIndex, const char *context);
+
+static int sizeofIndexDepth = 0;
 
 static void initEmit(Instruction *buf, int *count, int maxCount, OpCode op, int l, double a) {
     if (*count >= maxCount) {
@@ -184,21 +192,42 @@ static double parseConstFactor(void) {
     if (Token == KW_SIZEOF) {
         nextToken();
         Object *obj = parseSizeOfTargetObject(1);
+        int dims = expectedArrayDims(obj);
+        int used = sizeofIndexDepth;
         if (obj->type == OBJ_CONSTANT) {
             if (obj->constIsString) {
+                if (used > 0) {
+                    error("SIZEOF: STRING constant does not support index");
+                }
                 return (double)strlen(obj->constString);
+            }
+            if (used > 0) {
+                error("SIZEOF: scalar constant does not support index");
             }
             return 1;
         }
         if (obj->type == OBJ_VARIABLE || obj->type == OBJ_PARAMETER) {
             if (obj->isString) {
+                if (used > 0) {
+                    error("SIZEOF: STRING variable does not support index");
+                }
                 return (double)((obj->size > 0) ? obj->size : 1);
+            }
+            if (used > dims) {
+                error("SIZEOF: too many indices");
             }
             if (obj->isRuntimeArray || obj->lengthAddress >= 0) {
                 error("SIZEOF in CONST expression requires compile-time sized symbol");
             }
-            if (obj->size > 1) {
-                return (double)obj->size;
+            if (dims > 0) {
+                if (obj->dimCount > 0) {
+                    int rem = 1;
+                    for (int d = used; d < obj->dimCount; d++) {
+                        rem *= obj->dims[d];
+                    }
+                    return (double)rem;
+                }
+                return (used == 0) ? (double)obj->size : 1;
             }
             return 1;
         }
@@ -284,7 +313,53 @@ static double parseConstExpression(void) {
     return value;
 }
 
+// Parse nested numeric array literals like [1, [2, 3], 4] into a flat row-major list.
+static void parseConstArrayLiteralValues(double *values, int *count, int maxCount) {
+    expect(SB_LBRACK);
+    if (Token != SB_RBRACK) {
+        while (1) {
+            if (Token == SB_LBRACK) {
+                parseConstArrayLiteralValues(values, count, maxCount);
+            } else {
+                if (*count >= maxCount) {
+                    error("array initializer is too long");
+                }
+                values[(*count)++] = parseConstExpression();
+            }
+            if (Token == SB_COMMA) {
+                nextToken();
+                continue;
+            }
+            break;
+        }
+    }
+    expect(SB_RBRACK);
+}
+
+static void parseVarArrayLiteralValues(double *values, int *count, int maxCount) {
+    expect(SB_LBRACK);
+    if (Token != SB_RBRACK) {
+        while (1) {
+            if (Token == SB_LBRACK) {
+                parseVarArrayLiteralValues(values, count, maxCount);
+            } else {
+                if (*count >= maxCount) {
+                    error("array initializer is too long");
+                }
+                values[(*count)++] = parseVarInitializerValue();
+            }
+            if (Token == SB_COMMA) {
+                nextToken();
+                continue;
+            }
+            break;
+        }
+    }
+    expect(SB_RBRACK);
+}
+
 static Object *parseSizeOfTargetObject(int constMode) {
+    sizeofIndexDepth = 0;
     expect(SB_LPARENT);
     if (Token != TK_IDENT) {
         error("SIZEOF: expected identifier");
@@ -297,26 +372,15 @@ static Object *parseSizeOfTargetObject(int constMode) {
     }
     nextToken();
 
-    if (Token == SB_LBRACK) {
+    while (Token == SB_LBRACK) {
+        nextToken();
         if (constMode) {
-            nextToken();
             (void)parseConstExpression();
-            expect(SB_RBRACK);
         } else {
-            int depth = 1;
-            nextToken();
-            while (depth > 0) {
-                if (Token == TK_NONE) {
-                    error("SIZEOF: missing ']' ");
-                }
-                if (Token == SB_LBRACK) {
-                    depth++;
-                } else if (Token == SB_RBRACK) {
-                    depth--;
-                }
-                nextToken();
-            }
+            expression();
         }
+        expect(SB_RBRACK);
+        sizeofIndexDepth++;
     }
 
     expect(SB_RPARENT);
@@ -332,31 +396,49 @@ static void parseInitFactor(Instruction *buf, int *count, int maxCount) {
 
     if (Token == KW_SIZEOF) {
         nextToken();
-        expect(SB_LPARENT);
-        if (Token != TK_IDENT) {
-            error("SIZEOF initializer: expected identifier");
-        }
-        Object *obj = lookup(Id);
-        if (obj == NULL) {
-            char msg[120];
-            sprintf(msg, "SIZEOF initializer: undeclared identifier %s", Id);
-            error(msg);
-        }
-        nextToken();
-        expect(SB_RPARENT);
+        Object *obj = parseSizeOfTargetObject(0);
+        int dims = expectedArrayDims(obj);
+        int used = sizeofIndexDepth;
         if (obj->type == OBJ_CONSTANT) {
             if (obj->constIsString) {
+                if (used > 0) {
+                    error("SIZEOF initializer: STRING constant does not support index");
+                }
                 initEmit(buf, count, maxCount, LIT, 0, (double)strlen(obj->constString));
             } else {
+                if (used > 0) {
+                    error("SIZEOF initializer: scalar constant does not support index");
+                }
                 initEmit(buf, count, maxCount, LIT, 0, 1);
             }
         } else if (obj->type == OBJ_VARIABLE || obj->type == OBJ_PARAMETER) {
             if (obj->isString) {
+                if (used > 0) {
+                    error("SIZEOF initializer: STRING variable does not support index");
+                }
                 initEmit(buf, count, maxCount, LIT, 0, obj->size > 0 ? obj->size : 1);
             } else if (obj->isRuntimeArray || obj->lengthAddress >= 0) {
-                initEmit(buf, count, maxCount, LOD, getCurrentLevel() - obj->level, obj->lengthAddress);
-            } else if (obj->size > 1) {
-                initEmit(buf, count, maxCount, LIT, 0, obj->size);
+                if (used > dims) {
+                    error("SIZEOF initializer: too many indices");
+                }
+                if (used == 0) {
+                    initEmit(buf, count, maxCount, LOD, getCurrentLevel() - obj->level, obj->lengthAddress);
+                } else {
+                    initEmit(buf, count, maxCount, LIT, 0, 1);
+                }
+            } else if (dims > 0) {
+                if (used > dims) {
+                    error("SIZEOF initializer: too many indices");
+                }
+                if (obj->dimCount > 0) {
+                    int rem = 1;
+                    for (int d = used; d < obj->dimCount; d++) {
+                        rem *= obj->dims[d];
+                    }
+                    initEmit(buf, count, maxCount, LIT, 0, rem);
+                } else {
+                    initEmit(buf, count, maxCount, LIT, 0, (used == 0) ? obj->size : 1);
+                }
             } else {
                 initEmit(buf, count, maxCount, LIT, 0, 1);
             }
@@ -399,17 +481,39 @@ static void parseInitFactor(Instruction *buf, int *count, int maxCount) {
 
         nextToken();
         if (Token == SB_LBRACK) {
-            if (obj->size <= 1) {
+            if (!isArrayLikeObject(obj)) {
                 error("initializer indexed access requires array variable");
             }
             initEmitLoadObjectAddress(buf, count, maxCount, obj);
-            nextToken();
-            parseInitExpression(buf, count, maxCount);
-            expect(SB_RBRACK);
-            initEmit(buf, count, maxCount, OPR, 0, 2);
+            int used = 0;
+            int dims = expectedArrayDims(obj);
+            while (Token == SB_LBRACK) {
+                nextToken();
+                parseInitExpression(buf, count, maxCount);
+                expect(SB_RBRACK);
+                used++;
+                if ((obj->isRuntimeArray || obj->lengthAddress >= 0) && used > 1) {
+                    error("runtime array supports one dimension only");
+                }
+                if (dims > 0 && used > dims) {
+                    error("initializer has too many array indices");
+                }
+                if (!(obj->isRuntimeArray || obj->lengthAddress >= 0) && obj->dimCount > 0 && used < obj->dimCount) {
+                    int stride = 1;
+                    for (int d = used; d < obj->dimCount; d++) {
+                        stride *= obj->dims[d];
+                    }
+                    initEmit(buf, count, maxCount, LIT, 0, stride);
+                    initEmit(buf, count, maxCount, OPR, 0, 4);
+                }
+                initEmit(buf, count, maxCount, OPR, 0, 2);
+            }
+            if (dims > 0 && used != dims) {
+                error("initializer array variable requires full index");
+            }
             initEmit(buf, count, maxCount, LDI, 0, 0);
         } else {
-            if (obj->size > 1) {
+            if (isArrayLikeObject(obj)) {
                 error("initializer array variable requires an index");
             }
             initEmitLoadObjectValue(buf, count, maxCount, obj);
@@ -456,7 +560,76 @@ static void parseInitExpression(Instruction *buf, int *count, int maxCount) {
 }
 
 static int isAssignableObject(const Object *obj) {
-    return obj->type == OBJ_VARIABLE || obj->type == OBJ_PARAMETER;
+    if (obj->type == OBJ_PARAMETER) {
+        return 1;
+    }
+    if (obj->type == OBJ_VARIABLE) {
+        return !obj->isImmutable;
+    }
+    return 0;
+}
+
+static int expectedArrayDims(const Object *obj) {
+    if (obj == NULL || obj->isString) {
+        return 0;
+    }
+    if (obj->isRuntimeArray || obj->lengthAddress >= 0) {
+        return 1;
+    }
+    if (obj->dimCount > 0) {
+        return obj->dimCount;
+    }
+    return (obj->size > 1) ? 1 : 0;
+}
+
+static int isArrayLikeObject(const Object *obj) {
+    return expectedArrayDims(obj) > 0;
+}
+
+// Parses one or more [expr] suffixes and emits flattened row-major addressing.
+static int emitIndexedAddress(const Object *obj, int requireIndex, int requireFullIndex, const char *context) {
+    int dims = expectedArrayDims(obj);
+    int used = 0;
+    int i;
+
+    emitLoadObjectAddress(obj);
+    while (Token == SB_LBRACK) {
+        nextToken();
+        expression();
+        expect(SB_RBRACK);
+        used++;
+
+        if ((obj->isRuntimeArray || obj->lengthAddress >= 0) && used > 1) {
+            error("runtime array supports one dimension only");
+        }
+        if (dims > 0 && used > dims) {
+            char msg[160];
+            snprintf(msg, sizeof(msg), "%s: too many indices", context);
+            error(msg);
+        }
+
+        if (!(obj->isRuntimeArray || obj->lengthAddress >= 0) && obj->dimCount > 0 && used < obj->dimCount) {
+            int stride = 1;
+            for (i = used; i < obj->dimCount; i++) {
+                stride *= obj->dims[i];
+            }
+            emit(LIT, 0, stride);
+            emit(OPR, 0, 4);
+        }
+        emit(OPR, 0, 2);
+    }
+
+    if (requireIndex && used == 0) {
+        char msg[160];
+        snprintf(msg, sizeof(msg), "%s requires an index", context);
+        error(msg);
+    }
+    if (requireFullIndex && used > 0 && dims > 0 && used != dims) {
+        char msg[192];
+        snprintf(msg, sizeof(msg), "%s requires %d indices", context, dims);
+        error(msg);
+    }
+    return used;
 }
 
 static void emitLoadObjectValue(const Object *obj) {
@@ -541,23 +714,19 @@ static void parseProcedureCallArguments(const Object *proc) {
                     int indexedArg = 0;
                     if (Token == SB_LBRACK) {
                         indexedArg = 1;
-                        if (arg->size <= 1) {
+                        if (!isArrayLikeObject(arg)) {
                             error("Indexed VAR argument requires array variable");
                         }
-                        emitLoadObjectAddress(arg);
-                        nextToken();
-                        expression();
-                        expect(SB_RBRACK);
-                        emit(OPR, 0, 2);
+                        (void)emitIndexedAddress(arg, 1, 1, "Indexed VAR argument");
                     }
 
                     if (proc->paramSize[argCount] > 1) {
-                        if (indexedArg || arg->size <= 1) {
+                        if (indexedArg || !isArrayLikeObject(arg)) {
                             error("Array parameter requires array variable argument");
                         }
                         emitLoadObjectAddress(arg);
                     } else {
-                        if (!indexedArg && arg->size != 1) {
+                        if (!indexedArg && isArrayLikeObject(arg)) {
                             error("Scalar VAR parameter requires scalar variable or indexed array element");
                         }
                         if (!indexedArg) {
@@ -765,16 +934,37 @@ static void interpParseFactor(void) {
         }
 
         if (*interpExprPtr == '[') {
-            if (obj->type == OBJ_CONSTANT || obj->isString || obj->size <= 1) {
+            if (obj->type == OBJ_CONSTANT || obj->isString || !isArrayLikeObject(obj)) {
                 error("interpolation: indexed access requires numeric array variable");
             }
             emitLoadObjectAddress(obj);
-            interpExprPtr++; // consume '['
-            interpParseExpression();
-            if (!interpAccept(']')) {
-                error("interpolation: expected ']' ");
+            int used = 0;
+            int dims = expectedArrayDims(obj);
+            while (interpAccept('[')) {
+                interpParseExpression();
+                if (!interpAccept(']')) {
+                    error("interpolation: expected ']' ");
+                }
+                used++;
+                if ((obj->isRuntimeArray || obj->lengthAddress >= 0) && used > 1) {
+                    error("interpolation: runtime array supports one dimension only");
+                }
+                if (dims > 0 && used > dims) {
+                    error("interpolation: too many array indices");
+                }
+                if (!(obj->isRuntimeArray || obj->lengthAddress >= 0) && obj->dimCount > 0 && used < obj->dimCount) {
+                    int stride = 1;
+                    for (int d = used; d < obj->dimCount; d++) {
+                        stride *= obj->dims[d];
+                    }
+                    emit(LIT, 0, stride);
+                    emit(OPR, 0, 4);
+                }
+                emit(OPR, 0, 2);
             }
-            emit(OPR, 0, 2);
+            if (dims > 0 && used != dims) {
+                error("interpolation: array requires full index");
+            }
             emit(LDI, 0, 0);
             return;
         }
@@ -788,7 +978,7 @@ static void interpParseFactor(void) {
         if (obj->isString) {
             error("interpolation arithmetic does not support STRING variables");
         }
-        if (obj->size > 1) {
+        if (isArrayLikeObject(obj)) {
             error("interpolation arithmetic requires scalar variable");
         }
         emitLoadObjectValue(obj);
@@ -895,7 +1085,7 @@ static void emitInterpolatedBracedValue(const char *text, int len) {
                     emit(WRS, getCurrentLevel() - obj->level, obj->address);
                     return;
                 }
-                if (obj->size > 1) {
+                if (isArrayLikeObject(obj)) {
                     error("interpolation: array requires explicit index in expression");
                 }
                 emitLoadObjectValue(obj);
@@ -956,7 +1146,7 @@ static void emitWriteAtom(void) {
 
         nextToken();
         if (Token == SB_INC) {
-            if (obj->isString || obj->size != 1) {
+            if (obj->isString || isArrayLikeObject(obj)) {
                 error("Postfix increment in WRITE requires scalar numeric variable");
             }
             // Print old value, then commit increment.
@@ -978,18 +1168,14 @@ static void emitWriteAtom(void) {
         }
 
         if (Token == SB_LBRACK) {
-            if (obj->size <= 1) {
+            if (!isArrayLikeObject(obj)) {
                 error("Indexed WRITE requires an array variable");
             }
-            emitLoadObjectAddress(obj);
-            nextToken();
-            expression();
-            expect(SB_RBRACK);
-            emit(OPR, 0, 2);
+            (void)emitIndexedAddress(obj, 1, 1, "Indexed WRITE");
             emit(LDI, 0, 0);
             emit(WRI, 0, 0);
         } else {
-            if (obj->size > 1) {
+            if (isArrayLikeObject(obj)) {
                 error("Array variable requires an index");
             }
             emitLoadObjectValue(obj);
@@ -1041,7 +1227,7 @@ void factor(void) {
         } else {
             nextToken();
             if (Token == SB_INC) {
-                if (obj->size > 1) {
+                if (isArrayLikeObject(obj)) {
                     error("Postfix increment requires scalar variable");
                 }
                 // Postfix form returns old value, then stores incremented value.
@@ -1054,18 +1240,14 @@ void factor(void) {
                 return;
             }
             if (Token == SB_LBRACK) {
-                if (obj->size <= 1) {
+                if (!isArrayLikeObject(obj)) {
                     error("Indexed access is only valid for arrays");
                 }
-                emitLoadObjectAddress(obj);
-                nextToken();
-                expression();
-                expect(SB_RBRACK);
-                emit(OPR, 0, 2);
+                (void)emitIndexedAddress(obj, 1, 1, "array access");
                 emit(LDI, 0, 0);
                 return;
             }
-            if (obj->size > 1) {
+            if (isArrayLikeObject(obj)) {
                 error("Array variable requires an index");
             }
             emitLoadObjectValue(obj);
@@ -1089,7 +1271,7 @@ static void unaryExpr(void) {
         if (obj == NULL || !isAssignableObject(obj)) {
             error("Prefix increment requires variable");
         }
-        if (obj->isString || obj->size != 1) {
+        if (obj->isString || isArrayLikeObject(obj)) {
             error("Prefix increment requires scalar numeric variable");
         }
         nextToken();
@@ -1318,7 +1500,7 @@ static void emitInterpolatedString(const char *literal) {
             if (obj->isString) {
                 emit(WRS, getCurrentLevel() - obj->level, obj->address);
             } else {
-                if (obj->size > 1) {
+                if (isArrayLikeObject(obj)) {
                     error("Array placeholder requires explicit index in expression");
                 }
                 emitLoadObjectValue(obj);
@@ -1351,7 +1533,7 @@ void statement(void) {
         if (obj == NULL || !isAssignableObject(obj)) {
             error("Prefix increment requires variable");
         }
-        if (obj->isString || obj->size != 1) {
+        if (obj->isString || isArrayLikeObject(obj)) {
             error("Prefix increment requires scalar numeric variable");
         }
         nextToken();
@@ -1383,7 +1565,7 @@ void statement(void) {
         nextToken();
 
         if (Token == SB_INC) {
-            if (obj->isString || obj->size != 1) {
+            if (obj->isString || isArrayLikeObject(obj)) {
                 error("Increment requires scalar numeric variable");
             }
             nextToken();
@@ -1396,20 +1578,16 @@ void statement(void) {
 
         int isIndexed = 0;
         if (Token == SB_LBRACK) {
-            if (obj->size <= 1) {
+            if (!isArrayLikeObject(obj)) {
                 error("Indexed assignment requires an array variable");
             }
-            emitLoadObjectAddress(obj);
-            nextToken();
-            expression();
-            expect(SB_RBRACK);
-            emit(OPR, 0, 2);
+            (void)emitIndexedAddress(obj, 1, 1, "Indexed assignment");
             isIndexed = 1;
         }
 
         expect(SB_ASSIGN);
 
-        if (!isIndexed && (obj->isString || tokenStartsStringValueExpr() || obj->size > 1)) {
+        if (!isIndexed && (obj->isString || tokenStartsStringValueExpr() || isArrayLikeObject(obj))) {
             if (isIndexed) {
                 error("Cannot assign string expression to indexed storage");
             }
@@ -1433,7 +1611,7 @@ void statement(void) {
                 expression();
                 emit(STI, 0, 0);
             } else {
-                if (obj->size > 1) {
+                if (isArrayLikeObject(obj)) {
                     error("Array assignment requires an index");
                 }
                 if (obj->isRefParam) {
@@ -1468,12 +1646,14 @@ void statement(void) {
             }
             nextToken();
             if (Token == SB_LBRACK) {
-                emitLoadObjectAddress(obj);
-                nextToken();
-                expression();
-                expect(SB_RBRACK);
-                emit(OPR, 0, 2);
+                if (!isArrayLikeObject(obj)) {
+                    error("CALL READ: indexed target requires array variable");
+                }
+                (void)emitIndexedAddress(obj, 1, 1, "CALL READ indexed target");
             } else {
+                if (isArrayLikeObject(obj)) {
+                    error("CALL READ: array variable requires an index");
+                }
                 emitLoadObjectAddress(obj);
             }
             expect(SB_RPARENT);
@@ -1572,7 +1752,7 @@ void statement(void) {
         nextToken();
         if (Token != TK_IDENT) error("statement: expected identifier after FOR");
         Object* obj = lookup(Id);
-        if (obj == NULL || obj->type != OBJ_VARIABLE || obj->isString || obj->size != 1) {
+        if (obj == NULL || obj->type != OBJ_VARIABLE || obj->isString || isArrayLikeObject(obj)) {
             error("FOR: scalar integer variable required");
         }
         nextToken();
@@ -1662,11 +1842,65 @@ void block(void) {
                 char name[MAX_IDENT_LEN + 1];
                 strcpy(name, Id);
                 nextToken();
+
+                int dims[MAX_ARRAY_DIMS];
+                int dimCount = 0;
+                int totalSize = 1;
+                for (int d = 0; d < MAX_ARRAY_DIMS; d++) {
+                    dims[d] = 0;
+                }
+
+                while (Token == SB_LBRACK) {
+                    nextToken();
+                    if (dimCount >= MAX_ARRAY_DIMS) {
+                        error("block: too many array dimensions");
+                    }
+                    double dimValue = parseConstExpression();
+                    if (dimValue <= 0 || dimValue != (double)((int)dimValue)) {
+                        error("block: array size must be a positive integer expression");
+                    }
+                    dims[dimCount] = (int)dimValue;
+                    totalSize *= dims[dimCount];
+                    dimCount++;
+                    expect(SB_RBRACK);
+                }
+
                 if (Token != SB_EQU && Token != SB_ASSIGN) {
                     error("block: expected '=' or ':=' in CONST");
                 }
                 nextToken();
-                if (Token == TK_STRING) {
+
+                if (dimCount > 0) {
+                    if (Token != SB_LBRACK) {
+                        error("immutable array initializer must use bracket list");
+                    }
+                    if (pendingInitCount >= MAX_SYMBOL_TABLE_SIZE) {
+                        error("too many variable initializers in block");
+                    }
+
+                    enter(name, OBJ_VARIABLE, 0, totalSize, 0);
+                    Object *arrObj = lookup(name);
+                    arrObj->isImmutable = 1;
+                    arrObj->dimCount = dimCount;
+                    for (int d = 0; d < dimCount; d++) {
+                        arrObj->dims[d] = dims[d];
+                    }
+
+                    pendingInit[pendingInitCount].target = arrObj;
+                    pendingInit[pendingInitCount].kind = VAR_INIT_ARRAY_LITERAL;
+                    pendingInit[pendingInitCount].exprCount = 0;
+                    pendingInit[pendingInitCount].arrayCount = 0;
+
+                    parseConstArrayLiteralValues(pendingInit[pendingInitCount].arrayValues,
+                                                &pendingInit[pendingInitCount].arrayCount,
+                                                MAX_ARRAY_INIT_VALUES);
+                    if (pendingInit[pendingInitCount].arrayCount != totalSize) {
+                        error("immutable array initializer size mismatch");
+                    }
+                    arrObj->initSize = pendingInit[pendingInitCount].arrayCount;
+                    pendingInitCount++;
+
+                } else if (Token == TK_STRING) {
                     enter(name, OBJ_CONSTANT, 0, 0, 0);
                     Object *obj = lookup(name);
                     obj->constIsString = 1;
@@ -1692,6 +1926,11 @@ void block(void) {
                 nextToken();
                 int size = 1;
                 int isRuntimeArray = 0;
+                int dimCount = 0;
+                int dims[MAX_ARRAY_DIMS];
+                for (int d = 0; d < MAX_ARRAY_DIMS; d++) {
+                    dims[d] = 0;
+                }
                 Instruction runtimeSizeExpr[MAX_INIT_EXPR_CODE];
                 int runtimeSizeExprCount = 0;
                 if (Token == SB_LBRACK) {
@@ -1704,6 +1943,7 @@ void block(void) {
                                 error("block: array size must be a positive integer expression");
                             }
                             size = (int)sizeValue;
+                            dims[dimCount++] = size;
                         } else {
                             isRuntimeArray = 1;
                             runtimeSizeExprCount = 0;
@@ -1736,6 +1976,7 @@ void block(void) {
                                         error("block: array size must be a positive integer expression");
                                     }
                                     size = (int)sizeValue;
+                                    dims[dimCount++] = size;
                                 } else {
                                     isRuntimeArray = 1;
                                     runtimeSizeExprCount = 0;
@@ -1771,12 +2012,30 @@ void block(void) {
                         }
                     }
                     expect(SB_RBRACK);
+
+                    while (Token == SB_LBRACK) {
+                        if (isRuntimeArray) {
+                            error("runtime arrays support one dimension only");
+                        }
+                        if (dimCount >= MAX_ARRAY_DIMS) {
+                            error("block: too many array dimensions");
+                        }
+                        nextToken();
+                        double dimValue = parseConstExpression();
+                        if (dimValue <= 0 || dimValue != (double)((int)dimValue)) {
+                            error("block: array size must be a positive integer expression");
+                        }
+                        dims[dimCount++] = (int)dimValue;
+                        size *= (int)dimValue;
+                        expect(SB_RBRACK);
+                    }
                 }
                 enter(varName, OBJ_VARIABLE, 0, isRuntimeArray ? 2 : size, 0);
                 Object *declObj = lookup(varName);
                 if (isRuntimeArray) {
                     declObj->isRuntimeArray = 1;
                     declObj->lengthAddress = declObj->address + 1;
+                    declObj->dimCount = 1;
                     if (pendingRuntimeArrayInitCount >= MAX_SYMBOL_TABLE_SIZE) {
                         error("too many runtime array declarations in block");
                     }
@@ -1786,6 +2045,11 @@ void block(void) {
                         pendingRuntimeArrayInit[pendingRuntimeArrayInitCount].exprCode[s] = runtimeSizeExpr[s];
                     }
                     pendingRuntimeArrayInitCount++;
+                } else if (dimCount > 0) {
+                    declObj->dimCount = dimCount;
+                    for (int d = 0; d < dimCount; d++) {
+                        declObj->dims[d] = dims[d];
+                    }
                 }
 
                 if (Token == SB_EQU || Token == SB_ASSIGN) {
@@ -1805,21 +2069,9 @@ void block(void) {
                             error("Array initializer must use bracket list, e.g. VAR A[4] := [1,2]");
                         }
                         pendingInit[pendingInitCount].kind = VAR_INIT_ARRAY_LITERAL;
-                        nextToken();
-                        if (Token != SB_RBRACK) {
-                            while (1) {
-                                if (pendingInit[pendingInitCount].arrayCount >= MAX_ARRAY_INIT_VALUES) {
-                                    error("array initializer is too long");
-                                }
-                                pendingInit[pendingInitCount].arrayValues[pendingInit[pendingInitCount].arrayCount++] = parseVarInitializerValue();
-                                if (Token == SB_COMMA) {
-                                    nextToken();
-                                    continue;
-                                }
-                                break;
-                            }
-                        }
-                        expect(SB_RBRACK);
+                        parseVarArrayLiteralValues(pendingInit[pendingInitCount].arrayValues,
+                                                   &pendingInit[pendingInitCount].arrayCount,
+                                                   MAX_ARRAY_INIT_VALUES);
                         if (pendingInit[pendingInitCount].arrayCount > size) {
                             error("array initializer has more elements than declared size");
                         }
@@ -2054,18 +2306,14 @@ static void emitAppendStringTerm(const Object *target) {
 
     emitLoadObjectAddress(target);
     if (Token == SB_LBRACK) {
-        if (obj->size <= 1) {
+        if (!isArrayLikeObject(obj)) {
             error("string expression: indexed access requires array variable");
         }
-        emitLoadObjectAddress(obj);
-        nextToken();
-        expression();
-        expect(SB_RBRACK);
-        emit(OPR, 0, 2);
+        (void)emitIndexedAddress(obj, 1, 1, "string expression indexed access");
         emit(LDI, 0, 0);
         emit(CATI, 0, 0);
     } else {
-        if (obj->size > 1) {
+        if (isArrayLikeObject(obj)) {
             error("string expression: array variable requires an index");
         }
         emitLoadObjectValue(obj);

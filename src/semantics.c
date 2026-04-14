@@ -42,9 +42,14 @@ void enter(char *name, ObjectType type, double value, int size, int isString) {
     obj->isRefParam = 0;
     obj->paramCount = 0;
     obj->hasReturnValue = 0;
+    obj->isImmutable = 0;
+    obj->dimCount = 0;
     for (int k = 0; k < MAX_PROC_PARAMS; k++) {
         obj->paramIsRef[k] = 0;
         obj->paramSize[k] = 0;
+    }
+    for (int k = 0; k < MAX_ARRAY_DIMS; k++) {
+        obj->dims[k] = 0;
     }
 
     if (type == OBJ_VARIABLE) {
