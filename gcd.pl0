@@ -1,0 +1,20 @@
+PROGRAM GCD;
+
+PROCEDURE gcd(a; b; VAR c);
+    BEGIN
+        WHILE a <> b DO
+            IF a > b THEN a := a - b
+            ELSE b := b - a;
+        c := b;
+    END;
+
+VAR a, b, c = -1;
+BEGIN
+    CALL WRITE("a = ");
+    CALL READ(a);
+    CALL WRITE("b = ");
+    CALL READ(b);
+    CALL WRITELN("Before calling gcd: a = $a, b = $b, c = ${c + 1.5}");
+    CALL gcd(a, b, c);
+    CALL WRITELN("After calling gcd: a = $a, b = $b, c = $c");
+END

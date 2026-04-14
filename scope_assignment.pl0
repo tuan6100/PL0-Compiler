@@ -1,0 +1,14 @@
+PROGRAM Scope;
+VAR x;
+
+PROCEDURE P;
+  VAR x;
+  BEGIN
+    x := 1
+  END;
+
+BEGIN
+  x := 2;
+  CALL P;
+  CALL WRITE(x);
+END
