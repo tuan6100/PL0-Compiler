@@ -26,7 +26,9 @@ typedef enum {
     DUP,  // Duplicate top-of-stack value
     ALC,  // Allocate runtime array cells; consume length and push base address
     RETV, // Return from procedure with value on top of stack
-    LEN   // Compute string length from address on top of stack
+    LEN,  // Compute string length from address on top of stack
+    POP,  // Discard top-of-stack value
+    LRD   // Load last returned array dimension by index
 } OpCode;
 
 typedef struct {

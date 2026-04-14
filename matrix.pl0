@@ -11,7 +11,7 @@ VAR i, j;
 BEGIN
     CALL WRITELN(SIZEOF(mat));
     FOR i := 0 TO rows - 1 DO
-    begin
+    BEGIN
         FOR j := 0 TO cols - 1 DO CALL WRITE("${mat[i][j]} ");
         CALL WRITELN();
     END;

@@ -1,0 +1,58 @@
+PROGRAM MatrixMultiplication;
+
+
+PROCEDURE MULTIPLY(A[][], B[][]);
+CONST ROWSA = SIZEOF(A) / SIZEOF(A[0]),
+      COLSA = SIZEOF(A[0]),
+      ROWSB = SIZEOF(B) / SIZEOF(B[0]),
+      COLSB = SIZEOF(B[0]);
+VAR I, J, K, RESULT[ROWSA][COLSB];
+BEGIN
+    IF COLSA <> ROWSB THEN
+        RETURN NULL;
+
+    FOR I := 0 TO ROWSA - 1 DO
+    BEGIN
+        FOR J := 0 TO COLSB - 1 DO
+        BEGIN
+            RESULT[I][J] := 0;
+            FOR K := 0 TO COLSA - 1 DO
+                RESULT[I][J] += A[I][K] * B[K][J];
+        END;
+    END;
+    RETURN RESULT;
+END;
+
+PROCEDURE PRINT(MAT[][]);
+VAR ROWS, COLS, I, J;
+BEGIN
+    IF MAT = NULL THEN
+    BEGIN
+        CALL WRITELN("COLS(A) must equal ROWS(B)");
+        RETURN;
+    END;
+
+    ROWS := SIZEOF(MAT) / SIZEOF(MAT[0]);
+    COLS := SIZEOF(MAT[0]);
+
+    FOR I := 0 TO ROWS - 1 DO
+    BEGIN
+        FOR J := 0 TO COLS - 1 DO
+        BEGIN
+            CALL WRITE(MAT[I][J]);
+            CALL WRITE(" ");
+        END;
+        CALL WRITELN();
+    END;
+END;
+
+CONST MATA[3][4] := [[1, 0, 1, 2],
+                   [2, 1, 1, 1],
+                   [0, 1, 1, 3]],
+    MATB[4][3] := [[1, 2, 1],
+                   [2, 3, 1],
+                   [4, 2, 2],
+                   [1, 1, 1]];
+BEGIN
+    CALL PRINT(MULTIPLY(MATA, MATB));
+END.

@@ -18,6 +18,7 @@ const Keyword keywords[KEYWORDS_COUNT] = {
   {"FOR", KW_FOR},
 	 {"IF", KW_IF},
   {"NOT", KW_NOT},
+  {"NULL", KW_NULL},
    {"ODD",KW_ODD},
   {"OR", KW_OR},
 	{"PROCEDURE", KW_PROCEDURE},
@@ -39,11 +40,12 @@ const char TabToken[][12] = {	"NONE", "IDENT", "NUMBER", "STRING",
 		"BEGIN", "CALL", "CONST", "DO",  "ELSE", "END", "FOR", "IF",
 		"ODD", "PROCEDURE", "PROGRAM", "READ", "RETURN", "SIZEOF", "THEN", "TO", "VAR", "WHILE", "WRITE", "WRITELN",
 		"DOWNTO", "STEP",
-		"AND", "OR", "NOT",
+		"AND", "OR", "NOT", "NULL",
 
 		"PLUS", "MINUS", "TIMES", "SLASH", "EQU", "NEQ", "LSS",
 		"LEQ", "GTR", "GEQ", "PERCENT", "BITAND", "BITOR", "BITXOR", "BITNOT", "SHL", "SHR", "INC", "LPARENT", "RPARENT",
-		"LBRACK", "RBRACK", "PERIOD", "COMMA", "SEMICOLON", "ASSIGN"
+		"LBRACK", "RBRACK", "PERIOD", "COMMA", "SEMICOLON", "ASSIGN",
+		"ADD_ASSIGN", "SUB_ASSIGN", "MUL_ASSIGN", "DIV_ASSIGN", "MOD_ASSIGN"
 	};
 
 
@@ -184,10 +186,32 @@ TokenType getToken() {
 			ch = getCh();
 			return SB_INC;
 		}
+		if (ch == '=') {
+			ch = getCh();
+			return SB_ADD_ASSIGN;
+		}
 		return SB_PLUS;
-	case '-': ch = getCh(); return SB_MINUS;
-	case '*': ch = getCh(); return SB_TIMES;
-	case '/': ch = getCh(); return SB_SLASH;
+	case '-':
+		ch = getCh();
+		if (ch == '=') {
+			ch = getCh();
+			return SB_SUB_ASSIGN;
+		}
+		return SB_MINUS;
+	case '*':
+		ch = getCh();
+		if (ch == '=') {
+			ch = getCh();
+			return SB_MUL_ASSIGN;
+		}
+		return SB_TIMES;
+	case '/':
+		ch = getCh();
+		if (ch == '=') {
+			ch = getCh();
+			return SB_DIV_ASSIGN;
+		}
+		return SB_SLASH;
 	case '=': ch = getCh(); return SB_EQU;
 	case '!': ch = getCh(); return KW_NOT;
 	case '<':
@@ -213,7 +237,13 @@ TokenType getToken() {
 			return SB_SHR;
 		}
 		return SB_GTR;
-	case '%': ch = getCh(); return SB_PERCENT;
+	case '%':
+		ch = getCh();
+		if (ch == '=') {
+			ch = getCh();
+			return SB_MOD_ASSIGN;
+		}
+		return SB_PERCENT;
 	case '&': ch = getCh(); return SB_BITAND;
 	case '|': ch = getCh(); return SB_BITOR;
 	case '^': ch = getCh(); return SB_BITXOR;

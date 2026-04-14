@@ -4,16 +4,21 @@
 #include "codegen.h"
 #include "parser.h"
 #include "scanner.h"
+#include "semantics.h"
 
 Instruction code[MAX_CODE_SIZE];
 int cx = 0;
 
 #define STACK_SIZE 5000
 double stack[STACK_SIZE];
+static int allocLenAt[STACK_SIZE];
 
 #define MAX_STRING_LITERALS 128
 static char stringLiterals[MAX_STRING_LITERALS][MAX_STRING_LEN + 1];
 static int stringLiteralCount = 0;
+static double lastReturnDims[MAX_ARRAY_DIMS];
+static int lastReturnDimCount = 0;
+static int lastReturnBaseAddr = -1;
 
 static int stackIndexFromValue(double v, const char *context) {
     int idx = (int)v;
@@ -101,7 +106,9 @@ void listCode(void) {
                 code[i].op == CATI ? "CTI" :
                 code[i].op == DUP ? "DUP" :
                 code[i].op == ALC ? "ALC" :
-                code[i].op == RETV ? "RTV" : "LEN",
+                code[i].op == RETV ? "RTV" :
+                code[i].op == LEN ? "LEN" :
+                code[i].op == POP ? "POP" : "LRD",
             code[i].l, code[i].a);
     }
 }
@@ -351,13 +358,59 @@ void interpret(void) {
                 for (int k = 0; k < len; k++) {
                     stack[baseAddr + k] = 0;
                 }
+                allocLenAt[baseAddr] = len;
                 t += len;
                 t++;
                 stack[t] = (double)baseAddr;
                 break;
             }
             case RETV: {
-                double retValue = stack[t--];
+                int returnDimCount = (int)i.a;
+                if (returnDimCount < 0 || returnDimCount > MAX_ARRAY_DIMS) {
+                    error("invalid RETV descriptor arity");
+                }
+                double retValue;
+                if (returnDimCount > 0) {
+                    if (t - returnDimCount < 0) {
+                        error("RETV descriptor stack underflow");
+                    }
+                    int baseIdx = t - returnDimCount;
+                    retValue = stack[baseIdx];
+                    lastReturnBaseAddr = stackIndexFromValue(retValue, "array return base must be integer address");
+                    lastReturnDimCount = returnDimCount;
+                    for (int d = 0; d < returnDimCount; d++) {
+                        lastReturnDims[d] = stack[baseIdx + 1 + d];
+                    }
+                    if (returnDimCount > 1 && lastReturnDims[0] <= 0) {
+                        int tail = 1;
+                        int knownTail = 1;
+                        for (int d = 1; d < returnDimCount; d++) {
+                            int dim = stackIndexFromValue(lastReturnDims[d], "array return dimension must be integer");
+                            if (dim <= 0) {
+                                knownTail = 0;
+                                break;
+                            }
+                            tail *= dim;
+                        }
+                        if (knownTail && tail > 0) {
+                            int baseAddr = stackIndexFromValue(retValue, "array return base must be integer address");
+                            if (baseAddr >= 0 && baseAddr < STACK_SIZE && allocLenAt[baseAddr] > 0) {
+                                lastReturnDims[0] = allocLenAt[baseAddr] / tail;
+                            }
+                        }
+                    }
+                    for (int d = returnDimCount; d < MAX_ARRAY_DIMS; d++) {
+                        lastReturnDims[d] = 0;
+                    }
+                    t = baseIdx - 1;
+                } else {
+                    retValue = stack[t--];
+                    lastReturnDimCount = 0;
+                    lastReturnBaseAddr = -1;
+                    for (int d = 0; d < MAX_ARRAY_DIMS; d++) {
+                        lastReturnDims[d] = 0;
+                    }
+                }
                 t = b - 1;
                 p = stackIndexFromValue(stack[t + 3], "invalid return address");
                 b = stackIndexFromValue(stack[t + 2], "invalid dynamic link");
@@ -375,6 +428,41 @@ void interpret(void) {
                     len++;
                 }
                 stack[t] = len;
+                break;
+            }
+            case POP:
+                if (t <= 0) {
+                    error("POP on empty stack");
+                }
+                t--;
+                break;
+            case LRD: {
+                int d = (int)i.a;
+                if (d < 0 || d >= MAX_ARRAY_DIMS) {
+                    error("LRD index out of range");
+                }
+                if (d >= lastReturnDimCount) {
+                    t++;
+                    stack[t] = 0;
+                } else {
+                    if (d == 0 && lastReturnDims[0] <= 0 && lastReturnDimCount > 1 && lastReturnBaseAddr >= 0 && lastReturnBaseAddr < STACK_SIZE && allocLenAt[lastReturnBaseAddr] > 0) {
+                        int tail = 1;
+                        int knownTail = 1;
+                        for (int td = 1; td < lastReturnDimCount; td++) {
+                            int dim = stackIndexFromValue(lastReturnDims[td], "LRD dimension must be integer");
+                            if (dim <= 0) {
+                                knownTail = 0;
+                                break;
+                            }
+                            tail *= dim;
+                        }
+                        if (knownTail && tail > 0) {
+                            lastReturnDims[0] = allocLenAt[lastReturnBaseAddr] / tail;
+                        }
+                    }
+                    t++;
+                    stack[t] = lastReturnDims[d];
+                }
                 break;
             }
             case CAL:

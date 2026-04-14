@@ -19,6 +19,9 @@ extern char      CurrentSourceFile[260];
 static int pendingParamCount = 0;
 static int pendingParamIsRef[MAX_PROC_PARAMS];
 static int pendingParamSize[MAX_PROC_PARAMS];
+static int pendingParamDimCount[MAX_PROC_PARAMS];
+static int pendingParamDims[MAX_PROC_PARAMS][MAX_ARRAY_DIMS];
+static int pendingParamSlotCount[MAX_PROC_PARAMS];
 static char pendingParamName[MAX_PROC_PARAMS][MAX_IDENT_LEN + 1];
 static int pendingParamLevel = -1;
 static Object *currentProcedure = NULL;
@@ -42,8 +45,9 @@ typedef struct {
 
 typedef struct {
     Object *target;
-    Instruction exprCode[MAX_INIT_EXPR_CODE];
-    int exprCount;
+    Instruction dimExprCode[MAX_ARRAY_DIMS][MAX_INIT_EXPR_CODE];
+    int dimExprCount[MAX_ARRAY_DIMS];
+    int dimCount;
 } PendingRuntimeArrayInit;
 
 static PendingVarInit pendingInitFrames[MAX_NESTING_LEVEL][MAX_SYMBOL_TABLE_SIZE];
@@ -66,6 +70,7 @@ static void parseVarArrayLiteralValues(double *values, int *count, int maxCount)
 static int expectedArrayDims(const Object *obj);
 static int isArrayLikeObject(const Object *obj);
 static int emitIndexedAddress(const Object *obj, int requireIndex, int requireFullIndex, const char *context);
+static void emitLoadArrayDim(const Object *obj, int dimIndex);
 
 static int sizeofIndexDepth = 0;
 
@@ -91,7 +96,7 @@ static void initEmitLoadObjectValue(Instruction *buf, int *count, int maxCount, 
 
 static void initEmitLoadObjectAddress(Instruction *buf, int *count, int maxCount, const Object *obj) {
     int l = getCurrentLevel() - obj->level;
-    if (obj->isRefParam) {
+    if (obj->isRefParam || (obj->type == OBJ_PARAMETER && obj->dimCount > 0)) {
         initEmit(buf, count, maxCount, LOD, l, obj->address);
     } else {
         initEmit(buf, count, maxCount, LDA, l, obj->address);
@@ -169,6 +174,11 @@ static double parseVarInitializerValue(void) {
         return sign * value;
     }
 
+    if (Token == KW_NULL) {
+        nextToken();
+        return 0;
+    }
+
     if (Token == TK_IDENT) {
         Object *obj = lookup(Id);
         if (obj == NULL) {
@@ -222,8 +232,16 @@ static double parseConstFactor(void) {
             if (dims > 0) {
                 if (obj->dimCount > 0) {
                     int rem = 1;
+                    int knownRem = 1;
                     for (int d = used; d < obj->dimCount; d++) {
+                        if (obj->dims[d] <= 0) {
+                            knownRem = 0;
+                            break;
+                        }
                         rem *= obj->dims[d];
+                    }
+                    if (!knownRem) {
+                        rem = 1;
                     }
                     return (double)rem;
                 }
@@ -239,6 +257,11 @@ static double parseConstFactor(void) {
         double value = Num;
         nextToken();
         return value;
+    }
+
+    if (Token == KW_NULL) {
+        nextToken();
+        return 0;
     }
 
     if (Token == TK_IDENT) {
@@ -378,6 +401,7 @@ static Object *parseSizeOfTargetObject(int constMode) {
             (void)parseConstExpression();
         } else {
             expression();
+            emit(POP, 0, 0);
         }
         expect(SB_RBRACK);
         sizeofIndexDepth++;
@@ -390,6 +414,12 @@ static Object *parseSizeOfTargetObject(int constMode) {
 static void parseInitFactor(Instruction *buf, int *count, int maxCount) {
     if (Token == TK_NUMBER) {
         initEmit(buf, count, maxCount, LIT, 0, Num);
+        nextToken();
+        return;
+    }
+
+    if (Token == KW_NULL) {
+        initEmit(buf, count, maxCount, LIT, 0, 0);
         nextToken();
         return;
     }
@@ -421,7 +451,27 @@ static void parseInitFactor(Instruction *buf, int *count, int maxCount) {
                 if (used > dims) {
                     error("SIZEOF initializer: too many indices");
                 }
-                if (used == 0) {
+                if (obj->dimCount > 1) {
+                    int emitted = 0;
+                    for (int d = used; d < obj->dimCount; d++) {
+                        if (obj->dims[d] > 0) {
+                            initEmit(buf, count, maxCount, LIT, 0, obj->dims[d]);
+                        } else if (obj->dimAddr[d] != DIM_ADDR_UNUSED) {
+                            initEmit(buf, count, maxCount, LOD, getCurrentLevel() - obj->level, obj->dimAddr[d]);
+                        } else if (d == 0 && obj->lengthAddress >= 0) {
+                            initEmit(buf, count, maxCount, LOD, getCurrentLevel() - obj->level, obj->lengthAddress);
+                        } else {
+                            error("SIZEOF initializer: array dimension is not available");
+                        }
+                        if (emitted) {
+                            initEmit(buf, count, maxCount, OPR, 0, 4);
+                        }
+                        emitted = 1;
+                    }
+                    if (!emitted) {
+                        initEmit(buf, count, maxCount, LIT, 0, 1);
+                    }
+                } else if (used == 0) {
                     initEmit(buf, count, maxCount, LOD, getCurrentLevel() - obj->level, obj->lengthAddress);
                 } else {
                     initEmit(buf, count, maxCount, LIT, 0, 1);
@@ -432,10 +482,35 @@ static void parseInitFactor(Instruction *buf, int *count, int maxCount) {
                 }
                 if (obj->dimCount > 0) {
                     int rem = 1;
+                    int knownRem = 1;
+                    int emitted = 0;
                     for (int d = used; d < obj->dimCount; d++) {
+                        if (obj->dims[d] <= 0) {
+                            knownRem = 0;
+                            if (obj->dimAddr[d] != DIM_ADDR_UNUSED) {
+                                initEmit(buf, count, maxCount, LOD, getCurrentLevel() - obj->level, obj->dimAddr[d]);
+                                if (emitted) {
+                                    initEmit(buf, count, maxCount, OPR, 0, 4);
+                                }
+                                emitted = 1;
+                                continue;
+                            }
+                            break;
+                        }
                         rem *= obj->dims[d];
+                        if (!knownRem) {
+                            initEmit(buf, count, maxCount, LIT, 0, obj->dims[d]);
+                            if (emitted) {
+                                initEmit(buf, count, maxCount, OPR, 0, 4);
+                            }
+                            emitted = 1;
+                        }
                     }
-                    initEmit(buf, count, maxCount, LIT, 0, rem);
+                    if (knownRem) {
+                        initEmit(buf, count, maxCount, LIT, 0, rem);
+                    } else if (!emitted) {
+                        initEmit(buf, count, maxCount, LIT, 0, 1);
+                    }
                 } else {
                     initEmit(buf, count, maxCount, LIT, 0, (used == 0) ? obj->size : 1);
                 }
@@ -492,19 +567,26 @@ static void parseInitFactor(Instruction *buf, int *count, int maxCount) {
                 parseInitExpression(buf, count, maxCount);
                 expect(SB_RBRACK);
                 used++;
-                if ((obj->isRuntimeArray || obj->lengthAddress >= 0) && used > 1) {
+                if ((obj->isRuntimeArray || obj->lengthAddress >= 0) && obj->dimCount <= 1 && used > 1) {
                     error("runtime array supports one dimension only");
                 }
                 if (dims > 0 && used > dims) {
                     error("initializer has too many array indices");
                 }
-                if (!(obj->isRuntimeArray || obj->lengthAddress >= 0) && obj->dimCount > 0 && used < obj->dimCount) {
+                if (obj->dimCount > 0 && used < obj->dimCount) {
                     int stride = 1;
+                    int knownStride = 1;
                     for (int d = used; d < obj->dimCount; d++) {
+                        if (obj->dims[d] <= 0) {
+                            knownStride = 0;
+                            break;
+                        }
                         stride *= obj->dims[d];
                     }
-                    initEmit(buf, count, maxCount, LIT, 0, stride);
-                    initEmit(buf, count, maxCount, OPR, 0, 4);
+                    if (knownStride) {
+                        initEmit(buf, count, maxCount, LIT, 0, stride);
+                        initEmit(buf, count, maxCount, OPR, 0, 4);
+                    }
                 }
                 initEmit(buf, count, maxCount, OPR, 0, 2);
             }
@@ -574,7 +656,7 @@ static int expectedArrayDims(const Object *obj) {
         return 0;
     }
     if (obj->isRuntimeArray || obj->lengthAddress >= 0) {
-        return 1;
+        return (obj->dimCount > 0) ? obj->dimCount : 1;
     }
     if (obj->dimCount > 0) {
         return obj->dimCount;
@@ -584,6 +666,25 @@ static int expectedArrayDims(const Object *obj) {
 
 static int isArrayLikeObject(const Object *obj) {
     return expectedArrayDims(obj) > 0;
+}
+
+static void emitLoadArrayDim(const Object *obj, int dimIndex) {
+    if (obj == NULL || dimIndex < 0 || dimIndex >= MAX_ARRAY_DIMS) {
+        error("invalid array dimension access");
+    }
+    if (obj->dims[dimIndex] > 0) {
+        emit(LIT, 0, obj->dims[dimIndex]);
+        return;
+    }
+    if (obj->dimAddr[dimIndex] != DIM_ADDR_UNUSED) {
+        emit(LOD, getCurrentLevel() - obj->level, obj->dimAddr[dimIndex]);
+        return;
+    }
+    if (obj->isRuntimeArray && dimIndex == 0 && obj->lengthAddress >= 0) {
+        emit(LOD, getCurrentLevel() - obj->level, obj->lengthAddress);
+        return;
+    }
+    error("array dimension is not available at runtime");
 }
 
 // Parses one or more [expr] suffixes and emits flattened row-major addressing.
@@ -599,7 +700,7 @@ static int emitIndexedAddress(const Object *obj, int requireIndex, int requireFu
         expect(SB_RBRACK);
         used++;
 
-        if ((obj->isRuntimeArray || obj->lengthAddress >= 0) && used > 1) {
+        if ((obj->isRuntimeArray || obj->lengthAddress >= 0) && obj->dimCount <= 1 && used > 1) {
             error("runtime array supports one dimension only");
         }
         if (dims > 0 && used > dims) {
@@ -608,13 +709,11 @@ static int emitIndexedAddress(const Object *obj, int requireIndex, int requireFu
             error(msg);
         }
 
-        if (!(obj->isRuntimeArray || obj->lengthAddress >= 0) && obj->dimCount > 0 && used < obj->dimCount) {
-            int stride = 1;
+        if (obj->dimCount > 0 && used < obj->dimCount) {
             for (i = used; i < obj->dimCount; i++) {
-                stride *= obj->dims[i];
+                emitLoadArrayDim(obj, i);
+                emit(OPR, 0, 4);
             }
-            emit(LIT, 0, stride);
-            emit(OPR, 0, 4);
         }
         emit(OPR, 0, 2);
     }
@@ -644,7 +743,7 @@ static void emitLoadObjectValue(const Object *obj) {
 
 static void emitLoadObjectAddress(const Object *obj) {
     int l = getCurrentLevel() - obj->level;
-    if (obj->isRefParam) {
+    if (obj->isRefParam || (obj->type == OBJ_PARAMETER && obj->dimCount > 0)) {
         emit(LOD, l, obj->address);
     } else if (obj->isRuntimeArray || obj->lengthAddress >= 0) {
         emit(LOD, l, obj->address);
@@ -676,14 +775,54 @@ static void emitSizeOfObjectValue(const Object *obj) {
         return;
     }
     if (obj->type == OBJ_VARIABLE || obj->type == OBJ_PARAMETER) {
+        int dims = expectedArrayDims(obj);
+        int used = sizeofIndexDepth;
         if (obj->isString) {
+            if (used > 0) {
+                error("SIZEOF: STRING variable does not support index");
+            }
             emitLoadObjectAddress(obj);
             emit(LEN, 0, 0);
         } else if (obj->isRuntimeArray || obj->lengthAddress >= 0) {
-            emit(LOD, getCurrentLevel() - obj->level, obj->lengthAddress);
-        } else if (obj->size > 1) {
-            // C-like behavior: SIZEOF(array) returns declared element count.
-            emit(LIT, 0, obj->size);
+            if (used > dims) {
+                error("SIZEOF: too many indices");
+            }
+            if (obj->dimCount > 1) {
+                int emitted = 0;
+                for (int d = used; d < obj->dimCount; d++) {
+                    emitLoadArrayDim(obj, d);
+                    if (emitted) {
+                        emit(OPR, 0, 4);
+                    }
+                    emitted = 1;
+                }
+                if (!emitted) {
+                    emit(LIT, 0, 1);
+                }
+            } else if (used == 0) {
+                emit(LOD, getCurrentLevel() - obj->level, obj->lengthAddress);
+            } else {
+                emit(LIT, 0, 1);
+            }
+        } else if (dims > 0) {
+            if (used > dims) {
+                error("SIZEOF: too many indices");
+            }
+            if (obj->dimCount > 0) {
+                int emitted = 0;
+                for (int d = used; d < obj->dimCount; d++) {
+                    emitLoadArrayDim(obj, d);
+                    if (emitted) {
+                        emit(OPR, 0, 4);
+                    }
+                    emitted = 1;
+                }
+                if (!emitted) {
+                    emit(LIT, 0, 1);
+                }
+            } else {
+                emit(LIT, 0, (used == 0) ? obj->size : 1);
+            }
         } else {
             emit(LIT, 0, 1);
         }
@@ -701,7 +840,88 @@ static void parseProcedureCallArguments(const Object *proc) {
                 if (argCount >= proc->paramCount) {
                     error("Too many arguments in CALL");
                 }
-                if (proc->paramIsRef[argCount]) {
+                if (proc->paramDimCount[argCount] > 0 || proc->paramSize[argCount] > 1) {
+                    if (Token != TK_IDENT) {
+                        error("Array parameter requires identifier argument");
+                    }
+                    Object *arg = lookup(Id);
+                    if (arg == NULL) {
+                        error("Array parameter requires array value argument");
+                    }
+
+                    int formalRank = proc->paramDimCount[argCount];
+                    int actualRank = 0;
+                    int actualFromProc = 0;
+                    int actualDimVals[MAX_ARRAY_DIMS];
+                    for (int d = 0; d < MAX_ARRAY_DIMS; d++) {
+                        actualDimVals[d] = 0;
+                    }
+
+                    if (arg->type == OBJ_PROCEDURE) {
+                        actualFromProc = 1;
+                        nextToken();
+                        parseProcedureCallArguments(arg);
+                        if (!arg->hasReturnValue || arg->returnDimCount <= 0) {
+                            error("Array parameter requires procedure returning array value");
+                        }
+                        emit(CAL, getCurrentLevel() - arg->level, arg->address);
+                        actualRank = arg->returnDimCount;
+                        for (int d = 0; d < actualRank && d < MAX_ARRAY_DIMS; d++) {
+                            actualDimVals[d] = arg->returnDims[d];
+                        }
+                    } else {
+                        if (!isArrayLikeObject(arg) || arg->isString) {
+                            error("Array parameter requires array variable argument");
+                        }
+                        nextToken();
+                        if (Token == SB_LBRACK) {
+                            error("Array parameter requires whole array argument, not indexed element");
+                        }
+                        emitLoadObjectAddress(arg);
+                        actualRank = expectedArrayDims(arg);
+                        for (int d = 0; d < actualRank && d < MAX_ARRAY_DIMS; d++) {
+                            int actualDim = (d < arg->dimCount) ? arg->dims[d] : 0;
+                            if (actualDim <= 0 && d == 0 && arg->dimCount > 1 && arg->size > 1) {
+                                int tail = 1;
+                                int knownTail = 1;
+                                for (int td = 1; td < arg->dimCount; td++) {
+                                    if (arg->dims[td] <= 0) {
+                                        knownTail = 0;
+                                        break;
+                                    }
+                                    tail *= arg->dims[td];
+                                }
+                                if (knownTail && tail > 0) {
+                                    actualDim = arg->size / tail;
+                                }
+                            }
+                            actualDimVals[d] = actualDim;
+                        }
+                    }
+
+                    if (formalRank <= 0) {
+                        formalRank = actualRank;
+                    }
+                    if (formalRank <= 0) {
+                        error("Array parameter rank is not available");
+                    }
+                    for (int d = 0; d < formalRank; d++) {
+                        int formalDim = (d < MAX_ARRAY_DIMS) ? proc->paramDims[argCount][d] : 0;
+                        int actualDim = (d < MAX_ARRAY_DIMS) ? actualDimVals[d] : 0;
+                        if (formalDim > 0) {
+                            if (actualDim > 0 && actualDim != formalDim) {
+                                error("Array argument dimension mismatch");
+                            }
+                            emit(LIT, 0, formalDim);
+                        } else if (actualDim > 0) {
+                            emit(LIT, 0, actualDim);
+                        } else if (actualFromProc) {
+                            emit(LRD, 0, d);
+                        } else {
+                            emit(LIT, 0, 0);
+                        }
+                    }
+                } else if (proc->paramIsRef[argCount]) {
                     if (Token != TK_IDENT) {
                         error("VAR parameter requires assignable identifier argument");
                     }
@@ -720,23 +940,13 @@ static void parseProcedureCallArguments(const Object *proc) {
                         (void)emitIndexedAddress(arg, 1, 1, "Indexed VAR argument");
                     }
 
-                    if (proc->paramSize[argCount] > 1) {
-                        if (indexedArg || !isArrayLikeObject(arg)) {
-                            error("Array parameter requires array variable argument");
-                        }
+                    if (!indexedArg && isArrayLikeObject(arg)) {
+                        error("Scalar VAR parameter requires scalar variable or indexed array element");
+                    }
+                    if (!indexedArg) {
                         emitLoadObjectAddress(arg);
-                    } else {
-                        if (!indexedArg && isArrayLikeObject(arg)) {
-                            error("Scalar VAR parameter requires scalar variable or indexed array element");
-                        }
-                        if (!indexedArg) {
-                            emitLoadObjectAddress(arg);
-                        }
                     }
                 } else {
-                    if (proc->paramSize[argCount] > 1) {
-                        error("Array parameter must be passed by VAR/reference");
-                    }
                     if (Token == TK_STRING) {
                         emit(LIT, 0, addStringLiteral(StringLiteral));
                         nextToken();
@@ -883,6 +1093,11 @@ static void interpParseFactor(void) {
         }
         name[n] = '\0';
 
+        if (strcmp(name, "NULL") == 0) {
+            emit(LIT, 0, 0);
+            return;
+        }
+
         if (strcmp(name, "SIZEOF") == 0) {
             if (!interpAccept('(')) {
                 error("interpolation: SIZEOF expects '(' ");
@@ -900,6 +1115,16 @@ static void interpParseFactor(void) {
                 interpExprPtr++;
             }
             targetName[m] = '\0';
+            int savedSizeofDepth = sizeofIndexDepth;
+            sizeofIndexDepth = 0;
+            while (interpAccept('[')) {
+                interpParseExpression();
+                if (!interpAccept(']')) {
+                    error("interpolation: SIZEOF missing ']' ");
+                }
+                emit(POP, 0, 0);
+                sizeofIndexDepth++;
+            }
             if (!interpAccept(')')) {
                 error("interpolation: SIZEOF missing ')' ");
             }
@@ -910,6 +1135,7 @@ static void interpParseFactor(void) {
                 error(msg);
             }
             emitSizeOfObjectValue(targetObj);
+            sizeofIndexDepth = savedSizeofDepth;
             return;
         }
 
@@ -946,7 +1172,7 @@ static void interpParseFactor(void) {
                     error("interpolation: expected ']' ");
                 }
                 used++;
-                if ((obj->isRuntimeArray || obj->lengthAddress >= 0) && used > 1) {
+                if ((obj->isRuntimeArray || obj->lengthAddress >= 0) && obj->dimCount <= 1 && used > 1) {
                     error("interpolation: runtime array supports one dimension only");
                 }
                 if (dims > 0 && used > dims) {
@@ -954,11 +1180,18 @@ static void interpParseFactor(void) {
                 }
                 if (!(obj->isRuntimeArray || obj->lengthAddress >= 0) && obj->dimCount > 0 && used < obj->dimCount) {
                     int stride = 1;
+                    int knownStride = 1;
                     for (int d = used; d < obj->dimCount; d++) {
+                        if (obj->dims[d] <= 0) {
+                            knownStride = 0;
+                            break;
+                        }
                         stride *= obj->dims[d];
                     }
-                    emit(LIT, 0, stride);
-                    emit(OPR, 0, 4);
+                    if (knownStride) {
+                        emit(LIT, 0, stride);
+                        emit(OPR, 0, 4);
+                    }
                 }
                 emit(OPR, 0, 2);
             }
@@ -1194,6 +1427,9 @@ void factor(void) {
     if (Token == TK_NUMBER) {
         emit(LIT, 0, Num);
         nextToken();
+    } else if (Token == KW_NULL) {
+        emit(LIT, 0, 0);
+        nextToken();
     } else if (Token == KW_SIZEOF) {
         nextToken();
         Object *obj = parseSizeOfTargetObject(0);
@@ -1248,7 +1484,9 @@ void factor(void) {
                 return;
             }
             if (isArrayLikeObject(obj)) {
-                error("Array variable requires an index");
+                // Array in expression context evaluates to its base address (reference semantics).
+                emitLoadObjectAddress(obj);
+                return;
             }
             emitLoadObjectValue(obj);
         }
@@ -1555,6 +1793,9 @@ void statement(void) {
             nextToken();
             parseProcedureCallArguments(obj);
             emit(CAL, getCurrentLevel() - obj->level, obj->address);
+            if (obj->hasReturnValue) {
+                emit(POP, 0, 0);
+            }
             return;
         }
 
@@ -1585,9 +1826,16 @@ void statement(void) {
             isIndexed = 1;
         }
 
-        expect(SB_ASSIGN);
+        TokenType assignOp = Token;
+        if (assignOp != SB_ASSIGN &&
+            assignOp != SB_ADD_ASSIGN && assignOp != SB_SUB_ASSIGN &&
+            assignOp != SB_MUL_ASSIGN && assignOp != SB_DIV_ASSIGN &&
+            assignOp != SB_MOD_ASSIGN) {
+            error("assignment: expected ':=' or compound assignment operator");
+        }
+        nextToken();
 
-        if (!isIndexed && (obj->isString || tokenStartsStringValueExpr() || isArrayLikeObject(obj))) {
+        if (assignOp == SB_ASSIGN && !isIndexed && (obj->isString || tokenStartsStringValueExpr() || isArrayLikeObject(obj))) {
             if (isIndexed) {
                 error("Cannot assign string expression to indexed storage");
             }
@@ -1607,6 +1855,39 @@ void statement(void) {
             if (obj->isString && isIndexed) {
                 error("Cannot assign numeric value to indexed STRING storage");
             }
+
+            if (assignOp != SB_ASSIGN) {
+                int oprCode = 0;
+                if (obj->isString) {
+                    error("Compound assignment is not supported for STRING values");
+                }
+                if (!isIndexed && isArrayLikeObject(obj)) {
+                    error("Compound assignment requires indexed array element");
+                }
+                switch (assignOp) {
+                    case SB_ADD_ASSIGN: oprCode = 2; break;
+                    case SB_SUB_ASSIGN: oprCode = 3; break;
+                    case SB_MUL_ASSIGN: oprCode = 4; break;
+                    case SB_DIV_ASSIGN: oprCode = 5; break;
+                    case SB_MOD_ASSIGN: oprCode = 14; break;
+                    default: break;
+                }
+
+                if (isIndexed) {
+                    emit(DUP, 0, 0);
+                    emit(LDI, 0, 0);
+                    expression();
+                    emit(OPR, 0, oprCode);
+                    emit(STI, 0, 0);
+                } else {
+                    emitLoadObjectValue(obj);
+                    expression();
+                    emit(OPR, 0, oprCode);
+                    emitStoreObjectValue(obj);
+                }
+                return;
+            }
+
             if (isIndexed) {
                 expression();
                 emit(STI, 0, 0);
@@ -1688,6 +1969,9 @@ void statement(void) {
             nextToken();
             parseProcedureCallArguments(proc);
             emit(CAL, getCurrentLevel() - proc->level, proc->address);
+            if (proc->hasReturnValue) {
+                emit(POP, 0, 0);
+            }
         } else {
             error("CALL: expected procedure name or built-in");
         }
@@ -1700,7 +1984,58 @@ void statement(void) {
         if (Token == SB_SEMICOLON || Token == KW_END) {
             emit(OPR, 0, 0);
         } else {
+            if (Token == TK_IDENT) {
+                Object *retObj = lookup(Id);
+                if (retObj != NULL && (retObj->type == OBJ_VARIABLE || retObj->type == OBJ_PARAMETER) && isArrayLikeObject(retObj)) {
+                    int retDims = expectedArrayDims(retObj);
+                    nextToken();
+                    if (Token == SB_LBRACK) {
+                        error("RETURN array requires whole array value, not indexed element");
+                    }
+                    emitLoadObjectAddress(retObj);
+                    for (int d = 0; d < retDims; d++) {
+                        emitLoadArrayDim(retObj, d);
+                        currentProcedure->returnDims[d] = (d < retObj->dimCount) ? retObj->dims[d] : 0;
+                    }
+                    for (int d = retDims; d < MAX_ARRAY_DIMS; d++) {
+                        currentProcedure->returnDims[d] = 0;
+                    }
+                    currentProcedure->returnDimCount = retDims;
+                    currentProcedure->hasReturnValue = 1;
+                    emit(RETV, 0, retDims);
+                    return;
+                }
+                if (retObj != NULL && retObj->type == OBJ_PROCEDURE) {
+                    nextToken();
+                    parseProcedureCallArguments(retObj);
+                    if (!retObj->hasReturnValue) {
+                        error("RETURN procedure does not return a value");
+                    }
+                    emit(CAL, getCurrentLevel() - retObj->level, retObj->address);
+                    if (retObj->returnDimCount > 0) {
+                        for (int d = 0; d < retObj->returnDimCount; d++) {
+                            emit(LRD, 0, d);
+                            currentProcedure->returnDims[d] = retObj->returnDims[d];
+                        }
+                        for (int d = retObj->returnDimCount; d < MAX_ARRAY_DIMS; d++) {
+                            currentProcedure->returnDims[d] = 0;
+                        }
+                        currentProcedure->returnDimCount = retObj->returnDimCount;
+                        currentProcedure->hasReturnValue = 1;
+                        emit(RETV, 0, retObj->returnDimCount);
+                    } else {
+                        currentProcedure->returnDimCount = 0;
+                        currentProcedure->hasReturnValue = 1;
+                        emit(RETV, 0, 0);
+                    }
+                    return;
+                }
+            }
             expression();
+            currentProcedure->returnDimCount = 0;
+            for (int d = 0; d < MAX_ARRAY_DIMS; d++) {
+                currentProcedure->returnDims[d] = 0;
+            }
             emit(RETV, 0, 0);
             currentProcedure->hasReturnValue = 1;
         }
@@ -1822,12 +2157,30 @@ void block(void) {
     int pendingRuntimeArrayInitCount = 0;
 
     if (pendingParamCount > 0 && getCurrentLevel() == pendingParamLevel) {
+        int totalParamSlots = 0;
+        for (int i = 0; i < pendingParamCount; i++) {
+            totalParamSlots += pendingParamSlotCount[i];
+        }
+        int slotCursor = -totalParamSlots;
         for (int i = 0; i < pendingParamCount; i++) {
             enter(pendingParamName[i], OBJ_PARAMETER, 0, pendingParamSize[i], 0);
             Object *param = lookup(pendingParamName[i]);
-            param->address = i - pendingParamCount; // arguments are below base pointer
-            param->size = pendingParamSize[i];
+            param->address = slotCursor; // arguments are below base pointer
+            if (!pendingParamIsRef[i] && pendingParamDimCount[i] > 0) {
+                param->size = 1; // pointer/reference value cell
+            } else {
+                param->size = pendingParamSize[i];
+            }
             param->isRefParam = pendingParamIsRef[i];
+            param->dimCount = pendingParamDimCount[i];
+            for (int d = 0; d < MAX_ARRAY_DIMS; d++) {
+                param->dims[d] = pendingParamDims[i][d];
+                param->dimAddr[d] = DIM_ADDR_UNUSED;
+                if (pendingParamDims[i][d] == 0 && d < pendingParamDimCount[i]) {
+                    param->dimAddr[d] = slotCursor + 1 + d;
+                }
+            }
+            slotCursor += pendingParamSlotCount[i];
         }
         pendingParamCount = 0;
         pendingParamLevel = -1;
@@ -1908,8 +2261,25 @@ void block(void) {
                     obj->constString[MAX_STRING_LEN] = '\0';
                     nextToken();
                 } else {
-                    double value = parseConstExpression();
-                    enter(name, OBJ_CONSTANT, value, 0, 0);
+                    if (getCurrentLevel() > 1) {
+                        if (pendingInitCount >= MAX_SYMBOL_TABLE_SIZE) {
+                            error("too many variable initializers in block");
+                        }
+                        enter(name, OBJ_VARIABLE, 0, 1, 0);
+                        Object *obj = lookup(name);
+                        obj->isImmutable = 1;
+                        pendingInit[pendingInitCount].target = obj;
+                        pendingInit[pendingInitCount].kind = VAR_INIT_SCALAR_EXPR;
+                        pendingInit[pendingInitCount].exprCount = 0;
+                        pendingInit[pendingInitCount].arrayCount = 0;
+                        parseInitExpression(pendingInit[pendingInitCount].exprCode,
+                                            &pendingInit[pendingInitCount].exprCount,
+                                            MAX_INIT_EXPR_CODE);
+                        pendingInitCount++;
+                    } else {
+                        double value = parseConstExpression();
+                        enter(name, OBJ_CONSTANT, value, 0, 0);
+                    }
                 }
                 if (Token == SB_COMMA) nextToken(); else break;
             } while (1);
@@ -1931,8 +2301,12 @@ void block(void) {
                 for (int d = 0; d < MAX_ARRAY_DIMS; d++) {
                     dims[d] = 0;
                 }
-                Instruction runtimeSizeExpr[MAX_INIT_EXPR_CODE];
-                int runtimeSizeExprCount = 0;
+                Instruction runtimeDimExpr[MAX_ARRAY_DIMS][MAX_INIT_EXPR_CODE];
+                int runtimeDimExprCount[MAX_ARRAY_DIMS];
+                int runtimeDimCount = 0;
+                for (int d = 0; d < MAX_ARRAY_DIMS; d++) {
+                    runtimeDimExprCount[d] = 0;
+                }
                 if (Token == SB_LBRACK) {
                     nextToken();
                     if (Token == TK_NUMBER) {
@@ -1946,8 +2320,9 @@ void block(void) {
                             dims[dimCount++] = size;
                         } else {
                             isRuntimeArray = 1;
-                            runtimeSizeExprCount = 0;
-                            initEmit(runtimeSizeExpr, &runtimeSizeExprCount, MAX_INIT_EXPR_CODE, LIT, 0, sizeValue);
+                            runtimeDimExprCount[0] = 0;
+                            initEmit(runtimeDimExpr[0], &runtimeDimExprCount[0], MAX_INIT_EXPR_CODE, LIT, 0, sizeValue);
+                            runtimeDimCount = 1;
                             while (Token != SB_RBRACK) {
                                 if (Token == TK_NONE) {
                                     error("block: missing ']' in array declaration");
@@ -1955,8 +2330,8 @@ void block(void) {
                                 if (Token == SB_PLUS || Token == SB_MINUS || Token == SB_TIMES || Token == SB_SLASH) {
                                     TokenType op = Token;
                                     nextToken();
-                                    parseInitFactor(runtimeSizeExpr, &runtimeSizeExprCount, MAX_INIT_EXPR_CODE);
-                                    initEmit(runtimeSizeExpr, &runtimeSizeExprCount, MAX_INIT_EXPR_CODE, OPR, 0,
+                                    parseInitFactor(runtimeDimExpr[0], &runtimeDimExprCount[0], MAX_INIT_EXPR_CODE);
+                                    initEmit(runtimeDimExpr[0], &runtimeDimExprCount[0], MAX_INIT_EXPR_CODE, OPR, 0,
                                              op == SB_PLUS ? 2 : (op == SB_MINUS ? 3 : (op == SB_TIMES ? 4 : 5)));
                                 } else {
                                     error("block: invalid runtime array size expression");
@@ -1979,8 +2354,9 @@ void block(void) {
                                     dims[dimCount++] = size;
                                 } else {
                                     isRuntimeArray = 1;
-                                    runtimeSizeExprCount = 0;
-                                    initEmit(runtimeSizeExpr, &runtimeSizeExprCount, MAX_INIT_EXPR_CODE, LIT, 0, sizeObj->value);
+                                    runtimeDimExprCount[0] = 0;
+                                    initEmit(runtimeDimExpr[0], &runtimeDimExprCount[0], MAX_INIT_EXPR_CODE, LIT, 0, sizeObj->value);
+                                    runtimeDimCount = 1;
                                     while (Token != SB_RBRACK) {
                                         if (Token == TK_NONE) {
                                             error("block: missing ']' in array declaration");
@@ -1988,8 +2364,8 @@ void block(void) {
                                         if (Token == SB_PLUS || Token == SB_MINUS || Token == SB_TIMES || Token == SB_SLASH) {
                                             TokenType op = Token;
                                             nextToken();
-                                            parseInitFactor(runtimeSizeExpr, &runtimeSizeExprCount, MAX_INIT_EXPR_CODE);
-                                            initEmit(runtimeSizeExpr, &runtimeSizeExprCount, MAX_INIT_EXPR_CODE, OPR, 0,
+                                            parseInitFactor(runtimeDimExpr[0], &runtimeDimExprCount[0], MAX_INIT_EXPR_CODE);
+                                            initEmit(runtimeDimExpr[0], &runtimeDimExprCount[0], MAX_INIT_EXPR_CODE, OPR, 0,
                                                      op == SB_PLUS ? 2 : (op == SB_MINUS ? 3 : (op == SB_TIMES ? 4 : 5)));
                                         } else {
                                             error("block: invalid runtime array size expression");
@@ -1998,14 +2374,16 @@ void block(void) {
                                 }
                             } else {
                                 isRuntimeArray = 1;
-                                parseInitExpression(runtimeSizeExpr, &runtimeSizeExprCount, MAX_INIT_EXPR_CODE);
+                                parseInitExpression(runtimeDimExpr[0], &runtimeDimExprCount[0], MAX_INIT_EXPR_CODE);
+                                runtimeDimCount = 1;
                                 if (Token != SB_RBRACK) {
                                     error("block: invalid runtime array size expression");
                                 }
                             }
                         } else {
                             isRuntimeArray = 1;
-                            parseInitExpression(runtimeSizeExpr, &runtimeSizeExprCount, MAX_INIT_EXPR_CODE);
+                            parseInitExpression(runtimeDimExpr[0], &runtimeDimExprCount[0], MAX_INIT_EXPR_CODE);
+                            runtimeDimCount = 1;
                             if (Token != SB_RBRACK) {
                                 error("block: invalid runtime array size expression");
                             }
@@ -2014,41 +2392,67 @@ void block(void) {
                     expect(SB_RBRACK);
 
                     while (Token == SB_LBRACK) {
-                        if (isRuntimeArray) {
-                            error("runtime arrays support one dimension only");
-                        }
                         if (dimCount >= MAX_ARRAY_DIMS) {
                             error("block: too many array dimensions");
                         }
                         nextToken();
-                        double dimValue = parseConstExpression();
-                        if (dimValue <= 0 || dimValue != (double)((int)dimValue)) {
-                            error("block: array size must be a positive integer expression");
+                        if (isRuntimeArray) {
+                            if (runtimeDimCount >= MAX_ARRAY_DIMS) {
+                                error("block: too many runtime array dimensions");
+                            }
+                            parseInitExpression(runtimeDimExpr[runtimeDimCount], &runtimeDimExprCount[runtimeDimCount], MAX_INIT_EXPR_CODE);
+                            runtimeDimCount++;
+                        } else {
+                            double dimValue = parseConstExpression();
+                            if (dimValue <= 0 || dimValue != (double)((int)dimValue)) {
+                                error("block: array size must be a positive integer expression");
+                            }
+                            dims[dimCount++] = (int)dimValue;
+                            size *= (int)dimValue;
                         }
-                        dims[dimCount++] = (int)dimValue;
-                        size *= (int)dimValue;
                         expect(SB_RBRACK);
                     }
                 }
-                enter(varName, OBJ_VARIABLE, 0, isRuntimeArray ? 2 : size, 0);
+                enter(varName, OBJ_VARIABLE, 0, isRuntimeArray ? (1 + runtimeDimCount) : size, 0);
                 Object *declObj = lookup(varName);
                 if (isRuntimeArray) {
                     declObj->isRuntimeArray = 1;
                     declObj->lengthAddress = declObj->address + 1;
-                    declObj->dimCount = 1;
+                    declObj->dimCount = runtimeDimCount;
+                    for (int d = 0; d < runtimeDimCount; d++) {
+                        declObj->dimAddr[d] = declObj->address + 1 + d;
+                        declObj->dims[d] = 0;
+                    }
                     if (pendingRuntimeArrayInitCount >= MAX_SYMBOL_TABLE_SIZE) {
                         error("too many runtime array declarations in block");
                     }
                     pendingRuntimeArrayInit[pendingRuntimeArrayInitCount].target = declObj;
-                    pendingRuntimeArrayInit[pendingRuntimeArrayInitCount].exprCount = runtimeSizeExprCount;
-                    for (int s = 0; s < runtimeSizeExprCount; s++) {
-                        pendingRuntimeArrayInit[pendingRuntimeArrayInitCount].exprCode[s] = runtimeSizeExpr[s];
+                    pendingRuntimeArrayInit[pendingRuntimeArrayInitCount].dimCount = runtimeDimCount;
+                    for (int d = 0; d < runtimeDimCount; d++) {
+                        pendingRuntimeArrayInit[pendingRuntimeArrayInitCount].dimExprCount[d] = runtimeDimExprCount[d];
+                        for (int s = 0; s < runtimeDimExprCount[d]; s++) {
+                            pendingRuntimeArrayInit[pendingRuntimeArrayInitCount].dimExprCode[d][s] = runtimeDimExpr[d][s];
+                        }
                     }
                     pendingRuntimeArrayInitCount++;
                 } else if (dimCount > 0) {
                     declObj->dimCount = dimCount;
                     for (int d = 0; d < dimCount; d++) {
                         declObj->dims[d] = dims[d];
+                    }
+                    if (declObj->dimCount > 1 && declObj->dims[0] <= 0 && size > 0) {
+                        int tail = 1;
+                        int knownTail = 1;
+                        for (int d = 1; d < declObj->dimCount; d++) {
+                            if (declObj->dims[d] <= 0) {
+                                knownTail = 0;
+                                break;
+                            }
+                            tail *= declObj->dims[d];
+                        }
+                        if (knownTail && tail > 0) {
+                            declObj->dims[0] = size / tail;
+                        }
                     }
                 }
 
@@ -2120,28 +2524,51 @@ void block(void) {
                         error("too many procedure parameters");
                     }
                     int paramSize = 1;
+                    int paramDimCount = 0;
+                    int paramDims[MAX_ARRAY_DIMS];
+                    for (int d = 0; d < MAX_ARRAY_DIMS; d++) {
+                        paramDims[d] = 0;
+                    }
                     strcpy(pendingParamName[pendingParamCount], Id);
                     nextToken();
                     if (Token == SB_LBRACK) {
-                        nextToken();
-                        if (Token == SB_RBRACK) {
-                            // Unsized formal array parameter: VAR ARR[]
-                            paramSize = 2;
-                            nextToken();
-                        } else {
-                            double sizeValue = parseConstExpression();
-                            if (sizeValue <= 0 || sizeValue != (double)((int)sizeValue)) {
-                                error("procedure parameter array size must be a positive integer expression");
+                        int totalSize = 1;
+                        int hasUnsizedDim = 0;
+                        while (Token == SB_LBRACK) {
+                            if (paramDimCount >= MAX_ARRAY_DIMS) {
+                                error("too many array dimensions in parameter");
                             }
-                            paramSize = (int)sizeValue;
-                            expect(SB_RBRACK);
+                            nextToken();
+                            if (Token == SB_RBRACK) {
+                                hasUnsizedDim = 1;
+                                paramDims[paramDimCount++] = 0;
+                                nextToken();
+                            } else {
+                                double sizeValue = parseConstExpression();
+                                if (sizeValue <= 0 || sizeValue != (double)((int)sizeValue)) {
+                                    error("procedure parameter array size must be a positive integer expression");
+                                }
+                                paramDims[paramDimCount++] = (int)sizeValue;
+                                totalSize *= (int)sizeValue;
+                                expect(SB_RBRACK);
+                            }
                         }
-                        isRef = 1;
+                        // Keep unsized form as generic array marker for argument validation.
+                        paramSize = hasUnsizedDim ? 2 : totalSize;
                     }
                     pendingParamIsRef[pendingParamCount] = isRef;
                     pendingParamSize[pendingParamCount] = paramSize;
+                    pendingParamDimCount[pendingParamCount] = paramDimCount;
+                    pendingParamSlotCount[pendingParamCount] = (paramDimCount > 0) ? (1 + paramDimCount) : 1;
+                    for (int d = 0; d < MAX_ARRAY_DIMS; d++) {
+                        pendingParamDims[pendingParamCount][d] = (d < paramDimCount) ? paramDims[d] : 0;
+                    }
                     obj->paramIsRef[pendingParamCount] = isRef;
                     obj->paramSize[pendingParamCount] = paramSize;
+                    obj->paramDimCount[pendingParamCount] = paramDimCount;
+                    for (int d = 0; d < MAX_ARRAY_DIMS; d++) {
+                        obj->paramDims[pendingParamCount][d] = (d < paramDimCount) ? paramDims[d] : 0;
+                    }
                     pendingParamCount++;
 
                     if (Token == SB_COMMA || Token == SB_SEMICOLON) {
@@ -2170,20 +2597,7 @@ void block(void) {
     code[tx0].a = cx;
     emit(INT, 0, getVarCount() + 3);
 
-    for (int i = 0; i < pendingRuntimeArrayInitCount; i++) {
-        Object *arrObj = pendingRuntimeArrayInit[i].target;
-        int l = getCurrentLevel() - arrObj->level;
-        for (int k = 0; k < pendingRuntimeArrayInit[i].exprCount; k++) {
-            emit(pendingRuntimeArrayInit[i].exprCode[k].op,
-                 pendingRuntimeArrayInit[i].exprCode[k].l,
-                 pendingRuntimeArrayInit[i].exprCode[k].a);
-        }
-        emit(DUP, 0, 0);
-        emit(STO, l, arrObj->lengthAddress);
-        emit(ALC, 0, 0);
-        emit(STO, l, arrObj->address);
-    }
-
+    // 1) Initialize scalar immutable/runtime values first (may feed VLA dimensions).
     for (int i = 0; i < pendingInitCount; i++) {
         if (pendingInit[i].kind == VAR_INIT_SCALAR_EXPR) {
             for (int k = 0; k < pendingInit[i].exprCount; k++) {
@@ -2192,7 +2606,32 @@ void block(void) {
                      pendingInit[i].exprCode[k].a);
             }
             emitStoreObjectValue(pendingInit[i].target);
-        } else {
+        }
+    }
+
+    // 2) Allocate runtime arrays once dependent scalars are initialized.
+    for (int i = 0; i < pendingRuntimeArrayInitCount; i++) {
+        Object *arrObj = pendingRuntimeArrayInit[i].target;
+        int l = getCurrentLevel() - arrObj->level;
+        for (int d = 0; d < pendingRuntimeArrayInit[i].dimCount; d++) {
+            for (int k = 0; k < pendingRuntimeArrayInit[i].dimExprCount[d]; k++) {
+                emit(pendingRuntimeArrayInit[i].dimExprCode[d][k].op,
+                     pendingRuntimeArrayInit[i].dimExprCode[d][k].l,
+                     pendingRuntimeArrayInit[i].dimExprCode[d][k].a);
+            }
+            emit(DUP, 0, 0);
+            emit(STO, l, arrObj->dimAddr[d]);
+            if (d > 0) {
+                emit(OPR, 0, 4);
+            }
+        }
+        emit(ALC, 0, 0);
+        emit(STO, l, arrObj->address);
+    }
+
+    // 3) Apply static array literal initializers after storage exists.
+    for (int i = 0; i < pendingInitCount; i++) {
+        if (pendingInit[i].kind == VAR_INIT_ARRAY_LITERAL) {
             for (int k = 0; k < pendingInit[i].arrayCount; k++) {
                 emitLoadObjectAddress(pendingInit[i].target);
                 emit(LIT, 0, k);

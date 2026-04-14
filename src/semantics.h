@@ -12,6 +12,7 @@ typedef enum {
 
 #define MAX_PROC_PARAMS 16
 #define MAX_ARRAY_DIMS 8
+#define DIM_ADDR_UNUSED (-1000000)
 
 typedef struct {
     char name[MAX_IDENT_LEN + 1];
@@ -30,10 +31,15 @@ typedef struct {
     int paramCount; // Procedure parameter count
     int paramIsRef[MAX_PROC_PARAMS]; // Procedure parameter passing mode
     int paramSize[MAX_PROC_PARAMS]; // Formal parameter size (1 for scalar, >1 for array)
+    int paramDimCount[MAX_PROC_PARAMS]; // Formal parameter rank
+    int paramDims[MAX_PROC_PARAMS][MAX_ARRAY_DIMS]; // Formal parameter extents (0 = runtime)
     int hasReturnValue; // 1 if procedure contains RETURN with a value
+    int returnDimCount; // Procedure return rank (0 = scalar)
+    int returnDims[MAX_ARRAY_DIMS]; // Procedure return extents (0 = runtime/unknown)
     int isImmutable; // 1 when symbol is immutable after initialization
     int dimCount; // Number of array dimensions (0 for scalar)
     int dims[MAX_ARRAY_DIMS]; // Declared extent per dimension
+    int dimAddr[MAX_ARRAY_DIMS]; // Runtime descriptor slots for unknown dimensions (DIM_ADDR_UNUSED when not used)
 } Object;
 
 #define MAX_SYMBOL_TABLE_SIZE 100

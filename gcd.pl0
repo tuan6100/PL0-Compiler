@@ -8,13 +8,10 @@ PROCEDURE gcd(a; b; VAR c);
         c := b;
     END;
 
-VAR a, b, c = -1;
+CONST a = 10, b = 15;
+VAR c;
 BEGIN
-    CALL WRITE("a = ");
-    CALL READ(a);
-    CALL WRITE("b = ");
-    CALL READ(b);
-    CALL WRITELN("Before calling gcd: a = $a, b = $b, c = ${c + 1.5}");
+
     CALL gcd(a, b, c);
-    CALL WRITELN("After calling gcd: a = $a, b = $b, c = $c");
+    CALL WRITELN("a = $a, b = $b, c = $c");
 END
