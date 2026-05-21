@@ -1,6 +1,16 @@
-BEGIN PROGRAM
-Var a, b, c;
-a := 10
-b := 20
-c := a + b
-Var d := 10000000000000
+PROGRAM EXAMPLE;
+VAR a, b, c;
+PROCEDURE gcd(a; b; var d);
+    VAR TEMP;
+    Begin
+        WHILE a <> b DO
+            IF a > b THEN a := a - b
+        ELSE b := b - a;
+        d := b;
+    End;
+BEGIN
+    Call Readln(a);
+    Call Readln(b);
+    Call gcd(a,b,c);
+    Call Writeln(c);
+END.

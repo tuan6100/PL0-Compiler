@@ -1,21 +1,24 @@
 CC = gcc
-SRCS = $(wildcard **/*.c)
+CFLAGS = -Wall
+
+SRCS = $(shell find src -name "*.c")
 OBJS = $(SRCS:.c=.o)
+
 MAIN = pl0
 
-.PHONY: depend clean
+.PHONY: clean run
 
 $(MAIN): $(OBJS)
-	$(CC) $(CFLAGS) $(INCLUDES) -o $(MAIN) $(OBJS)
+	$(CC) $(CFLAGS) -o $@ $(OBJS)
 
 %.o: %.c
-	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
 	rm -f $(OBJS) $(MAIN) $(MAIN).exe
 
 run: $(MAIN)
-	./$(MAIN) $(filter-out $@, $(MAKECMDGOALS))
+	./$(MAIN) $(filter-out $@,$(MAKECMDGOALS))
 
 %:
 	@:
