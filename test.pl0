@@ -1,7 +1,6 @@
 PROGRAM EXAMPLE;
 VAR a, b, c;
 PROCEDURE gcd(a; b; var d);
-    VAR TEMP;
     Begin
         WHILE a <> b DO
             IF a > b THEN a := a - b
