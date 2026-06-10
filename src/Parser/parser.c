@@ -1,10 +1,13 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "parser.h"
 #include "../Scanner/scanner.h"
+#include "../Semantic/semantic.h"
 
 void parse(TokenType token) {
+    initSymbolTable();
     Token = token;
     program();
 }
@@ -16,6 +19,7 @@ void error(const char msg[]) {
 
 void factor() {
     if (Token == TK_IDENT) {
+        checkDeclared(Id);
         Token = getToken();
         if (Token == SB_LBRACK) {
             Token = getToken();
@@ -41,7 +45,7 @@ void factor() {
 
 void term() {
     factor();
-    while (Token == SB_TIMES || Token == SB_SLASH) {
+    while (Token == SB_TIMES || Token == SB_SLASH || Token == SB_PERCENT) {
         Token = getToken();
         factor();
     }
@@ -58,19 +62,33 @@ void expression() {
 }
 
 void condition() {
-    expression();
-    if (Token == SB_EQU || Token == SB_NEQ || Token == SB_LSS ||
-        Token == SB_LEQ || Token == SB_GTR || Token == SB_GEQ) {
+    if (Token == KW_ODD) {
         Token = getToken();
         expression();
     } else {
-        error("condition: syntax error");
+        expression();
+        if (Token == SB_EQU || Token == SB_NEQ || Token == SB_LSS ||
+            Token == SB_LEQ || Token == SB_GTR || Token == SB_GEQ) {
+            Token = getToken();
+            expression();
+            } else {
+                error("Thiếu toán tử so sánh");
+            }
     }
 }
 
 void statement() {
     if (Token == TK_IDENT) {
+        checkIsVar(Id);
         Token = getToken();
+        if (Token == SB_LBRACK) {
+            Token = getToken();
+            expression();
+            if (Token == SB_RBRACK)
+                Token = getToken();
+            else
+                error("Thiếu dấu ]");
+        }
         if (Token == SB_ASSIGN) {
             Token = getToken();
             expression();
@@ -79,6 +97,7 @@ void statement() {
     } else if (Token == KW_CALL) {
         Token = getToken();
         if (Token == TK_IDENT) {
+            checkIsProcedure(Id);
             Token = getToken();
             if (Token == SB_LPARENT) {
                 Token = getToken();
@@ -90,7 +109,7 @@ void statement() {
                 if (Token == SB_RPARENT)
                     Token = getToken();
                 else
-                    error("Thiếu dấu đóng ngoặc");
+                    error("Thiếu dấu )");
             }
         } else
             error("Thiếu tên thủ tục/hàm");
@@ -111,6 +130,8 @@ void statement() {
         if (Token == KW_THEN) {
             Token = getToken();
             statement();
+            if (Token == SB_SEMICOLON)
+                Token = getToken();
             if (Token == KW_ELSE) {
                 Token = getToken();
                 statement();
@@ -153,12 +174,15 @@ void block(void) {
     if (Token == KW_CONST) {
         Token = getToken();
         if (Token == TK_IDENT) {
+            char constName[11];
+            strncpy(constName, Id, 10); constName[10] = '\0';
             Token = getToken();
             if (Token == SB_EQU) {
                 Token = getToken();
-                if (Token == TK_NUMBER)
+                if (Token == TK_NUMBER) {
+                    addSymbol(constName, SYM_CONST, Num);
                     Token = getToken();
-                else
+                } else
                     error("Thiếu giá trị hằng số");
             } else
                 error("Thiếu dấu =");
@@ -167,12 +191,15 @@ void block(void) {
         while (Token == SB_COMMA) {
             Token = getToken();
             if (Token == TK_IDENT) {
+                char constName2[11];
+                strncpy(constName2, Id, 10); constName2[10] = '\0';
                 Token = getToken();
                 if (Token == SB_EQU) {
                     Token = getToken();
-                    if (Token == TK_NUMBER)
+                    if (Token == TK_NUMBER) {
+                        addSymbol(constName2, SYM_CONST, Num);
                         Token = getToken();
-                    else
+                    } else
                         error("Thiếu giá trị hằng số");
                 } else
                     error("Thiếu dấu =");
@@ -188,6 +215,7 @@ void block(void) {
     if (Token == KW_VAR) {
         Token = getToken();
         if (Token == TK_IDENT) {
+            addSymbol(Id, SYM_VAR, 0);
             Token = getToken();
             if (Token == SB_LBRACK) {
                 Token = getToken();
@@ -205,6 +233,7 @@ void block(void) {
         while (Token == SB_COMMA) {
             Token = getToken();
             if (Token == TK_IDENT) {
+                addSymbol(Id, SYM_VAR, 0);
                 Token = getToken();
                 if (Token == SB_LBRACK) {
                     Token = getToken();
@@ -229,19 +258,25 @@ void block(void) {
     if (Token == KW_PROCEDURE) {
         Token = getToken();
         if (Token == TK_IDENT) {
+            addSymbol(Id, SYM_PROCEDURE, 0);
             Token = getToken();
+            enterScope();
             if (Token == SB_LPARENT) {
                 Token = getToken();
                 if (Token == KW_VAR)
                     Token = getToken();
-                if (Token == TK_IDENT)
+                if (Token == TK_IDENT) {
+                    addSymbol(Id, SYM_VAR, 0);
                     Token = getToken();
+                }
                 while (Token == SB_SEMICOLON) {
                     Token = getToken();
                     if (Token == KW_VAR)
                         Token = getToken();
-                    if (Token == TK_IDENT)
+                    if (Token == TK_IDENT) {
+                        addSymbol(Id, SYM_VAR, 0);
                         Token = getToken();
+                    }
                 }
                 if (Token == SB_RPARENT)
                     Token = getToken();
@@ -257,6 +292,7 @@ void block(void) {
                     error("Thiếu dấu ;");
             } else
                 error("Thiếu dấu ;");
+            leaveScope();
         }
     }
 

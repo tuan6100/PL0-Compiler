@@ -3,6 +3,8 @@
 #include "../Scanner/scanner.h"
 
 extern TokenType Token;
+extern int Num;
+extern char Id[];
 
 void parse(TokenType token);
 void error (const char msg[]);//Báo lỗi
