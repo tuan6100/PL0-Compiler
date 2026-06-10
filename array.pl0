@@ -1,6 +1,28 @@
-PROGRAM Array;
-CONST arr[3] = [1, 2, 3];
-VAR i;
+PROGRAM TEST;
+CONST LIMIT = 10;
+VAR i, x, arr[5];
+
+PROCEDURE SHOW(var value);
 BEGIN
-    FOR i := 0 TO SIZEOF(arr) - 1 DO CALL WRITELN(arr[i]);
+    CALL WRITE("${value} ");
+END;
+
+BEGIN
+    x := 0;
+    arr[1] := x + LIMIT;
+    CALL READ(x);
+
+    IF ODD x THEN
+        x := x + 1
+    ELSE
+        x := x - 1;
+
+    WHILE x < 10 DO
+        x := x + 1;
+
+    FOR i := 1 TO x DO
+    BEGIN
+        arr[i] := i % 2;
+        CALL SHOW(arr[i]);
+    END
 END.
