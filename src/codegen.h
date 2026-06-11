@@ -28,7 +28,10 @@ typedef enum {
     RETV, // Return from procedure with value on top of stack
     LEN,  // Compute string length from address on top of stack
     POP,  // Discard top-of-stack value
-    LRD   // Load last returned array dimension by index
+    LRD,  // Load last returned array dimension by index
+    CHK,  // Check array index bounds
+    WRA,  // Write array given base address and dimension descriptors
+    CATA  // Append array string representation to string destination
 } OpCode;
 
 typedef struct {

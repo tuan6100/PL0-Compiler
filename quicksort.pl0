@@ -41,5 +41,3 @@ BEGIN
     sort(arr, 0, n - 1);
     writeln("After sorting: $arr");
 END.
-
-GIT_AUTHOR_DATE="2025-09-01 10:00:00" GIT_COMMITTER_DATE="2025-09-01 10:00:00" git commit -m "Add feature A"

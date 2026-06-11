@@ -60,6 +60,52 @@ static void appendStringFromStack(int dstAddr, int srcAddr) {
     appendToStringAt(dstAddr, temp);
 }
 
+static void printArrayElements(int baseAddr, int currentDim, int dimCount, const int *dims, int *offset) {
+    putchar('[');
+    int extent = dims[currentDim];
+    if (currentDim == dimCount - 1) {
+        for (int i = 0; i < extent; i++) {
+            if (i > 0) printf(", ");
+            int addr = baseAddr + (*offset)++;
+            if (addr >= 0 && addr < STACK_SIZE) {
+                printf("%g", stack[addr]);
+            } else {
+                printf("0");
+            }
+        }
+    } else {
+        for (int i = 0; i < extent; i++) {
+            if (i > 0) printf(", ");
+            printArrayElements(baseAddr, currentDim + 1, dimCount, dims, offset);
+        }
+    }
+    putchar(']');
+}
+
+static void appendArrayElementsToString(int dstAddr, int baseAddr, int currentDim, int dimCount, const int *dims, int *offset) {
+    appendToStringAt(dstAddr, "[");
+    int extent = dims[currentDim];
+    if (currentDim == dimCount - 1) {
+        for (int i = 0; i < extent; i++) {
+            if (i > 0) appendToStringAt(dstAddr, ", ");
+            int addr = baseAddr + (*offset)++;
+            char temp[32];
+            if (addr >= 0 && addr < STACK_SIZE) {
+                sprintf(temp, "%g", stack[addr]);
+            } else {
+                strcpy(temp, "0");
+            }
+            appendToStringAt(dstAddr, temp);
+        }
+    } else {
+        for (int i = 0; i < extent; i++) {
+            if (i > 0) appendToStringAt(dstAddr, ", ");
+            appendArrayElementsToString(dstAddr, baseAddr, currentDim + 1, dimCount, dims, offset);
+        }
+    }
+    appendToStringAt(dstAddr, "]");
+}
+
 int addStringLiteral(const char *literal) {
     if (stringLiteralCount >= MAX_STRING_LITERALS) {
         error("too many string literals");
@@ -108,12 +154,14 @@ void listCode(void) {
                 code[i].op == ALC ? "ALC" :
                 code[i].op == RETV ? "RTV" :
                 code[i].op == LEN ? "LEN" :
-                code[i].op == POP ? "POP" : "LRD",
+                code[i].op == POP ? "POP" :
+                code[i].op == LRD ? "LRD" :
+                code[i].op == CHK ? "CHK" :
+                code[i].op == WRA ? "WRA" : "CTA",
             code[i].l, code[i].a);
     }
 }
 
-// Simple optimization: Constant Folding and basic dead code elimination can be added here
 void optimizeCode(void) {
     for (int i = 0; i < cx - 2; i++) {
         if (code[i].op == LIT && code[i+1].op == LIT && code[i+2].op == OPR) {
@@ -123,20 +171,59 @@ void optimizeCode(void) {
             double result = 0.0;
             int foldable = 1;
             switch(op) {
-                case 2: result = val1 + val2; break; // +
-                case 3: result = val1 - val2; break; // -
-                case 4: result = val1 * val2; break; // *
-                case 5: if (val2 != 0) result = val1 / val2; else foldable = 0; break; // /
-                default: foldable = 0; break;
+                case 2:
+                    result = val1 + val2;
+                    break;
+                case 3:
+                    result = val1 - val2;
+                    break;
+                case 4:
+                    result = val1 * val2;
+                    break;
+                case 5:
+                    if (val2 != 0) {
+                        result = val1 / val2;
+                    } else {
+                        foldable = 0;
+                        break;
+                    }
+                    break;
+                case 14:
+                    if (val2 != 0) {
+                        result = (double)((int)val1 % (int)val2);
+                    } else {
+                        foldable = 0;
+                        break;
+                    }
+                    break;
+                case 23:
+                    if (val2 != 0) {
+                        result = floor(val1 / val2);
+                    } else {
+                        foldable = 0;
+                        break;
+                    }
+                    break;
+                default:
+                    foldable = 0;
+                    break;
             }
             if (foldable) {
                 code[i].a = result;
-                // Move following instructions up by 2
                 for (int j = i + 1; j < cx - 2; j++) {
                     code[j] = code[j + 2];
                 }
                 cx -= 2;
-                i--; // Check again
+                for (int j = 0; j < cx; j++) {
+                    if (code[j].op == JMP || code[j].op == JPC || code[j].op == CAL) {
+                        if (code[j].a > i + 2) {
+                            code[j].a -= 2;
+                        } else if (code[j].a > i) {
+                            code[j].a = i;
+                        }
+                    }
+                }
+                i--;
             }
         }
     }
@@ -163,7 +250,11 @@ void interpret(void) {
     do {
         Instruction i = code[p++];
         switch (i.op) {
-            case LIT: t++; stack[t] = i.a; break;
+            case LIT:
+                t++;
+                stack[t] = i.a;
+                break;
+
             case OPR:
                 switch ((int)i.a) {
                     case 0: // return
@@ -171,18 +262,52 @@ void interpret(void) {
                         p = stackIndexFromValue(stack[t + 3], "invalid return address");
                         b = stackIndexFromValue(stack[t + 2], "invalid dynamic link");
                         break;
-                    case 1: stack[t] = -stack[t]; break; // negate
-                    case 2: t--; stack[t] += stack[t+1]; break; // +
-                    case 3: t--; stack[t] -= stack[t+1]; break; // -
-                    case 4: t--; stack[t] *= stack[t+1]; break; // *
-                    case 5: t--; stack[t] /= stack[t+1]; break; // /
-                    case 6: stack[t] = (fmod(stack[t], 2.0) != 0.0); break; // odd
-                    case 7: t--; stack[t] = (stack[t] == stack[t+1]); break; // ==
-                    case 8: t--; stack[t] = (stack[t] != stack[t+1]); break; // !=
-                    case 9: t--; stack[t] = (stack[t] <  stack[t+1]); break; // <
-                    case 10: t--; stack[t] = (stack[t] >= stack[t+1]); break; // >=
-                    case 11: t--; stack[t] = (stack[t] >  stack[t+1]); break; // >
-                    case 12: t--; stack[t] = (stack[t] <= stack[t+1]); break; // <=
+                    case 1: // negate
+                        stack[t] = -stack[t];
+                        break;
+                    case 2: // +
+                        t--;
+                        stack[t] += stack[t+1];
+                        break;
+                    case 3: // -
+                        t--;
+                        stack[t] -= stack[t+1];
+                        break;
+                    case 4: // *
+                        t--;
+                        stack[t] *= stack[t+1];
+                        break;
+                    case 5: // /
+                        t--;
+                        stack[t] /= stack[t+1];
+                        break;
+                    case 6: // odd
+                        stack[t] = fmod(stack[t], 2.0) != 0.0;
+                        break;
+                    case 7: // ==
+                        t--;
+                        stack[t] = stack[t] == stack[t+1];
+                        break;
+                    case 8: // !=
+                        t--;
+                        stack[t] = stack[t] != stack[t+1];
+                        break;
+                    case 9: // <
+                        t--;
+                        stack[t] = stack[t] < stack[t+1];
+                        break;
+                    case 10: // >=
+                        t--;
+                        stack[t] = stack[t] >= stack[t+1];
+                        break;
+                    case 11: // >
+                        t--;
+                        stack[t] = stack[t] >  stack[t+1];
+                        break;
+                    case 12: // <=
+                        t--;
+                        stack[t] = stack[t] <= stack[t+1];
+                        break;
                     case 13: { // bitwise OR
                         int rhs = stackIndexFromValue(stack[t], "bitwise OR requires integer operands");
                         int lhs = stackIndexFromValue(stack[t - 1], "bitwise OR requires integer operands");
@@ -245,13 +370,25 @@ void interpret(void) {
                         break;
                     case 21: // logical OR
                         t--;
-                        stack[t] = (stack[t] != 0.0 || stack[t + 1] != 0.0);
+                        stack[t] = stack[t] != 0.0 || stack[t + 1] != 0.0;
                         break;
                     case 22: // logical NOT
-                        stack[t] = (stack[t] == 0.0);
+                        stack[t] = stack[t] == 0.0;
                         break;
+                    case 23: { // floor division (//)
+                        double rhs = stack[t];
+                        double lhs = stack[t - 1];
+                        if (rhs == 0.0) {
+                            error("division by zero");
+                        }
+                        t--;
+                        stack[t] = floor(lhs / rhs);
+                        break;
+                    }
                 }
+
                 break;
+
             case LOD: t++; stack[t] = stack[base(i.l, b) + (int)i.a]; break;
             case STO: stack[base(i.l, b) + (int)i.a] = stack[t];
                  t--;
@@ -283,7 +420,7 @@ void interpret(void) {
             case WRS: {
                 int addr = base(i.l, b) + (int)i.a;
                 while (addr < STACK_SIZE && stack[addr] != 0) {
-                    putchar((char)((unsigned char)stack[addr]));
+                    putchar((char)stack[addr]);
                     addr++;
                 }
                 break;
@@ -465,6 +602,53 @@ void interpret(void) {
                 }
                 break;
             }
+            case CHK: {
+                int bound = stackIndexFromValue(stack[t--], "array bound must be integer");
+                int idx = stackIndexFromValue(stack[t], "array index must be integer");
+                if (idx < 0 || (bound > 0 && idx >= bound)) {
+                    char errBuf[120];
+                    if (bound > 0) {
+                        snprintf(errBuf, sizeof(errBuf), "array index %d out of bounds (0..%d)", idx, bound - 1);
+                    } else {
+                        snprintf(errBuf, sizeof(errBuf), "array index %d out of bounds", idx);
+                    }
+                    error(errBuf);
+                }
+                break;
+            }
+            case WRA: {
+                int rank = (int)i.l;
+                if (rank <= 0) rank = 1;
+                int dims[MAX_ARRAY_DIMS];
+                for (int d = rank - 1; d >= 0; d--) {
+                    dims[d] = stackIndexFromValue(stack[t--], "array dimension must be integer");
+                }
+                int baseAddr = stackIndexFromValue(stack[t--], "array base must be integer address");
+                if (rank == 1 && dims[0] <= 0 && baseAddr >= 0 && baseAddr < STACK_SIZE && allocLenAt[baseAddr] > 0) {
+                    dims[0] = allocLenAt[baseAddr];
+                }
+                if (dims[0] < 0) dims[0] = 0;
+                int offset = 0;
+                printArrayElements(baseAddr, 0, rank, dims, &offset);
+                break;
+            }
+            case CATA: {
+                int rank = (int)i.l;
+                if (rank <= 0) rank = 1;
+                int dims[MAX_ARRAY_DIMS];
+                for (int d = rank - 1; d >= 0; d--) {
+                    dims[d] = stackIndexFromValue(stack[t--], "array dimension must be integer");
+                }
+                int baseAddr = stackIndexFromValue(stack[t--], "array base must be integer address");
+                int dstAddr = stackIndexFromValue(stack[t--], "CATA destination requires integer address");
+                if (rank == 1 && dims[0] <= 0 && baseAddr >= 0 && baseAddr < STACK_SIZE && allocLenAt[baseAddr] > 0) {
+                    dims[0] = allocLenAt[baseAddr];
+                }
+                if (dims[0] < 0) dims[0] = 0;
+                int offset = 0;
+                appendArrayElementsToString(dstAddr, baseAddr, 0, rank, dims, &offset);
+                break;
+            }
             case CAL:
                 stack[t + 1] = base(i.l, b);
                 stack[t + 2] = b;
@@ -472,9 +656,18 @@ void interpret(void) {
                 b = t + 1;
                 p = (int)i.a;
                 break;
-            case INT: t += (int)i.a; break;
-            case JMP: p = (int)i.a; break;
-            case JPC: if (stack[t] == 0) p = (int)i.a; t--; break;
+            case INT:
+                t += (int)i.a;
+                break;
+            case JMP:
+                p = (int)i.a;
+                break;
+            case JPC:
+                if (stack[t] == 0) {
+                    p = (int)i.a;
+                }
+                t--;
+                break;
         }
     } while (p != 0);
 }
