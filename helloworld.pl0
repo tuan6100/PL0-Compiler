@@ -1,6 +1,6 @@
-PROGRAM HelloWorld;
+ PROGRAM HelloWorld;
 VAR s[32];
 BEGIN
   s := "Hello world";
-  CALL WRITE(s);
+  WRITE(s);
 END

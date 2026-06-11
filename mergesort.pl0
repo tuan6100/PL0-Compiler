@@ -39,22 +39,19 @@ PROCEDURE sort(arr[], left, right);
     BEGIN
         IF left < right THEN
             BEGIN
-                mid := (left + right) >> 1;
-                CALL sort(arr, left, mid);
-                CALL sort(arr, mid + 1, right);
-                CALL merge(arr, left, mid, right);
+                mid := (left + right) // 2;
+                sort(arr, left, mid);
+                sort(arr, mid + 1, right);
+                merge(arr, left, mid, right);
             END;
     END;
 
 VAR arr[5] := [2, 4, 3, 5, 1], i;
 CONST n = SIZEOF(arr);
 BEGIN
-    CALL sort(arr, 0, n - 1);
-    FOR i := 0 TO n - 1 DO
-        BEGIN
-           CALL WRITE("${arr[i]}");
-           IF i < n - 1 THEN CALL WRITE(", ");
-        END;
+    writeln("Before sorting: $arr");
+    sort(arr, 0, n - 1);
+    writeln("After sorting: $arr");
 END.
 
         

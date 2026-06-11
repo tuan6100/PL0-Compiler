@@ -8,14 +8,14 @@ PROCEDURE calculateArea(radius);
 
 PROCEDURE printArea(radius);
     BEGIN
-         CALL WRITELN("The area of a circle with a radius of $radius is: ${calculateArea(radius)}")
+         WRITELN("The area of a circle with a radius of $radius is: ${calculateArea(radius)}")
     END;
 
 VAR r;
 BEGIN
-    CALL WRITELN(PI);
+    WRITELN(PI);
     r := 2;
-    CALL printArea(r);
+    printArea(r);
     r := 3.5;
-    CALL printArea(r);
+    printArea(r);
 END

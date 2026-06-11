@@ -13,7 +13,7 @@ typedef enum {
 	KW_READ, KW_RETURN, KW_SIZEOF, KW_THEN, KW_TO, KW_VAR, KW_WHILE, KW_WRITE, KW_WRITELN,
 	KW_DOWNTO, KW_STEP,
 	KW_AND, KW_OR, KW_NOT, KW_NULL,
-	SB_PLUS, SB_MINUS, SB_TIMES, SB_SLASH, SB_EQU, SB_NEQ,
+	SB_PLUS, SB_MINUS, SB_TIMES, SB_SLASH, SB_FLOORDIV, SB_EQU, SB_NEQ,
 	SB_LSS, SB_LEQ, SB_GTR, SB_GEQ, SB_PERCENT,
 	SB_BITAND, SB_BITOR, SB_BITXOR, SB_BITNOT, SB_SHL, SB_SHR, SB_INC,
 	SB_LPARENT, SB_RPARENT, SB_LBRACK, SB_RBRACK,
@@ -33,7 +33,7 @@ extern const char TabToken[][12];
 extern double Num;
 extern int TokenLine;
 extern int TokenColumn;
-extern char CurrentSourceFile[260];
+extern char currentSourceFile[260];
 
 extern char StringLiteral[MAX_STRING_LEN + 1];
 

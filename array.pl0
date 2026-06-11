@@ -1,28 +1,8 @@
 PROGRAM TEST;
-CONST LIMIT = 10;
-VAR i, x, arr[5];
-
-PROCEDURE SHOW(var value);
-BEGIN
-    CALL WRITE("${value} ");
-END;
+CONST LIMIT = 5;
+CONST array[LIMIT] = [1, 2, 3, 4, 5];
 
 BEGIN
-    x := 0;
-    arr[1] := x + LIMIT;
-    CALL READ(x);
-
-    IF ODD x THEN
-        x := x + 1
-    ELSE
-        x := x - 1;
-
-    WHILE x < 10 DO
-        x := x + 1;
-
-    FOR i := 1 TO x DO
-    BEGIN
-        arr[i] := i % 2;
-        CALL SHOW(arr[i]);
-    END
+    WRITELN(array);
+    WRITELN(array[LIMIT]);
 END.

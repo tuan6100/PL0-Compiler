@@ -1,5 +1,5 @@
 PROGRAM ERROR3;
 CONST c = 10;
 BEGIN
-  CALL WRITE(++c);
+  WRITE(++c);
 END.

@@ -28,7 +28,7 @@ VAR ROWS, COLS, I, J;
 BEGIN
     IF MAT = NULL THEN
     BEGIN
-        CALL WRITELN("COLS(A) must equal ROWS(B)");
+        WRITELN("COLS(A) must equal ROWS(B)");
         RETURN;
     END;
 
@@ -39,10 +39,10 @@ BEGIN
     BEGIN
         FOR J := 0 TO COLS - 1 DO
         BEGIN
-            CALL WRITE(MAT[I][J]);
-            CALL WRITE(" ");
+            WRITE(MAT[I][J]);
+            WRITE(" ");
         END;
-        CALL WRITELN();
+        WRITELN();
     END;
 END;
 
@@ -54,5 +54,5 @@ CONST MATA[3][4] := [[1, 0, 1, 2],
                    [4, 2, 2],
                    [1, 1, 1]];
 BEGIN
-    CALL PRINT(MULTIPLY(MATA, MATB));
+    PRINT(MULTIPLY(MATA, MATB));
 END.

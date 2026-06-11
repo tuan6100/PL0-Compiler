@@ -9,28 +9,27 @@
 const Keyword keywords[KEYWORDS_COUNT] = {
 	{"AND", KW_AND},
 	{"BEGIN", KW_BEGIN},
-	{"CALL", KW_CALL},
 	{"CONST", KW_CONST},
 	{"DO", KW_DO},
-		  {"DOWNTO", KW_DOWNTO},
-  {"ELSE", KW_ELSE},
+	{"DOWNTO", KW_DOWNTO},
+	{"ELSE", KW_ELSE},
 	{"END", KW_END},
-  {"FOR", KW_FOR},
-	 {"IF", KW_IF},
-  {"NOT", KW_NOT},
-  {"NULL", KW_NULL},
-   {"ODD",KW_ODD},
-  {"OR", KW_OR},
+	{"FOR", KW_FOR},
+	{"IF", KW_IF},
+	{"NOT", KW_NOT},
+	{"NULL", KW_NULL},
+   	{"ODD",KW_ODD},
+	{"OR", KW_OR},
 	{"PROCEDURE", KW_PROCEDURE},
-  {"PROGRAM", KW_PROGRAM},
-  {"READ", KW_READ},
-  {"READLN", KW_READ},
-  {"RETURN", KW_RETURN},
-  {"SIZEOF", KW_SIZEOF},
-  {"STEP", KW_STEP},
-  {"THEN", KW_THEN},
-  {"TO", KW_TO},
-  {"VAR", KW_VAR},
+	{"PROGRAM", KW_PROGRAM},
+	{"READ", KW_READ},
+	{"READLN", KW_READ},
+	{"RETURN", KW_RETURN},
+	{"SIZEOF", KW_SIZEOF},
+	{"STEP", KW_STEP},
+	{"THEN", KW_THEN},
+	{"TO", KW_TO},
+	{"VAR", KW_VAR},
 	{"WHILE", KW_WHILE},
 	{"WRITE", KW_WRITE},
 	{"WRITELN", KW_WRITELN}
@@ -42,18 +41,18 @@ const char TabToken[][12] = {	"NONE", "IDENT", "NUMBER", "STRING",
 		"DOWNTO", "STEP",
 		"AND", "OR", "NOT", "NULL",
 
-		"PLUS", "MINUS", "TIMES", "SLASH", "EQU", "NEQ", "LSS",
+		"PLUS", "MINUS", "TIMES", "SLASH", "FLOORDIV", "EQU", "NEQ", "LSS",
 		"LEQ", "GTR", "GEQ", "PERCENT", "BITAND", "BITOR", "BITXOR", "BITNOT", "SHL", "SHR", "INC", "LPARENT", "RPARENT",
 		"LBRACK", "RBRACK", "PERIOD", "COMMA", "SEMICOLON", "ASSIGN",
 		"ADD_ASSIGN", "SUB_ASSIGN", "MUL_ASSIGN", "DIV_ASSIGN", "MOD_ASSIGN"
 	};
 
 
-TokenType Token;
+TokenType token;
 double    Num;
 int       TokenLine = 1;
 int       TokenColumn = 1;
-char      CurrentSourceFile[260] = "<input>";
+char      currentSourceFile[260];
 char	  Id[MAX_IDENT_LEN + 1];
 char      StringLiteral[MAX_STRING_LEN + 1];
 
@@ -96,8 +95,7 @@ static void unreadCh(int c) {
 }
 
 TokenType getToken() {
-	//TODO
-	while(ch==' ' || ch=='\n' || ch=='\t' || ch=='\r') ch = getCh(); //dau phan cach
+	while(ch==' ' || ch=='\n' || ch=='\t' || ch=='\r') ch = getCh();
 	if (ch == EOF) {
 		return TK_NONE;
 	}
@@ -128,7 +126,7 @@ TokenType getToken() {
 		}
 		StringLiteral[i] = '\0';
 		if (ch != '"') {
-			printf("Error at %s: %d:%d: Unterminated string literal\n", CurrentSourceFile, TokenLine, TokenColumn);
+			printf("Error at %s: %d:%d: Unterminated string literal\n", currentSourceFile, TokenLine, TokenColumn);
 			return TK_NONE;
 		}
 		ch = getCh();
@@ -163,7 +161,7 @@ TokenType getToken() {
 		}
 
 		if (length > MAX_NUMBER_LEN) {
-			printf("Error at %s:%d:%d: Number is too large\n", CurrentSourceFile, TokenLine, TokenColumn);
+			printf("Error at %s:%d:%d: Number is too large\n", currentSourceFile, TokenLine, TokenColumn);
 			return TK_NONE;
 		}
 
@@ -207,6 +205,10 @@ TokenType getToken() {
 		return SB_TIMES;
 	case '/':
 		ch = getCh();
+		if (ch == '/') {
+			ch = getCh();
+			return SB_FLOORDIV;
+		}
 		if (ch == '=') {
 			ch = getCh();
 			return SB_DIV_ASSIGN;
@@ -219,10 +221,12 @@ TokenType getToken() {
 		if (ch == '=') {
 			ch = getCh();
 			return SB_LEQ;
-		} else if (ch == '>') {
+		}
+		if (ch == '>') {
 			ch = getCh();
 			return SB_NEQ;
-		} else if (ch == '<') {
+		}
+		if (ch == '<') {
 			ch = getCh();
 			return SB_SHL;
 		}
@@ -232,7 +236,8 @@ TokenType getToken() {
 		if (ch == '=') {
 			ch = getCh();
 			return SB_GEQ;
-		} else if (ch == '>') {
+		}
+		if (ch == '>') {
 			ch = getCh();
 			return SB_SHR;
 		}
@@ -244,17 +249,39 @@ TokenType getToken() {
 			return SB_MOD_ASSIGN;
 		}
 		return SB_PERCENT;
-	case '&': ch = getCh(); return SB_BITAND;
-	case '|': ch = getCh(); return SB_BITOR;
-	case '^': ch = getCh(); return SB_BITXOR;
-	case '~': ch = getCh(); return SB_BITNOT;
-	case '(': ch = getCh(); return SB_LPARENT;
-	case ')': ch = getCh(); return SB_RPARENT;
-	case '[': ch = getCh(); return SB_LBRACK;
-	case ']': ch = getCh(); return SB_RBRACK;
-	case '.': ch = getCh(); return SB_PERIOD;
-	case ',': ch = getCh(); return SB_COMMA;
-	case ';': ch = getCh(); return SB_SEMICOLON;
+	case '&':
+		ch = getCh();
+		return SB_BITAND;
+
+	case '|':
+		ch = getCh();
+		return SB_BITOR;
+
+	case '^':
+		ch = getCh();
+		return SB_BITXOR;
+	case '~':
+		ch = getCh();
+		return SB_BITNOT;
+	case '(':
+		ch = getCh();
+		return SB_LPARENT;
+	case ')':
+		ch = getCh();
+		return SB_RPARENT;
+	case '[':
+		ch = getCh();
+		return SB_LBRACK;
+	case ']':
+		ch = getCh();
+		return SB_RBRACK;
+	case '.':
+		ch = getCh();
+		return SB_PERIOD;
+	case ',':
+		ch = getCh(); return SB_COMMA;
+	case ';': ch = getCh();
+		return SB_SEMICOLON;
 	default:
 		ch = getCh();
 		return TK_NONE;
@@ -263,11 +290,17 @@ TokenType getToken() {
 
 void compile(char * filename) {
 	if((f = fopen(filename, "rt")) == NULL) {
-		printf("File %s not found\n", filename);
-		return;
+		fprintf(stderr, "File %s not found\n", filename);
+		exit(1);
 	}
-	strncpy(CurrentSourceFile, filename, sizeof(CurrentSourceFile) - 1);
-	CurrentSourceFile[sizeof(CurrentSourceFile) - 1] = '\0';
+	const char *ext = strrchr(filename, '.');
+	const char *expectedExt = ".pl0";
+	if (strcmp(ext, expectedExt) != 0) {
+		fprintf(stderr, "Not PL/0 source file, expected *%s\n", expectedExt);
+		exit(1);
+	}
+	strncpy(currentSourceFile, filename, sizeof(currentSourceFile) - 1);
+	currentSourceFile[sizeof(currentSourceFile) - 1] = '\0';
 	curLine = 1;
 	curColumn = 0;
 	prevLine = 1;

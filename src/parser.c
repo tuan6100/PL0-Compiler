@@ -2,19 +2,19 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <math.h>
 #include "scanner.h"
 #include "parser.h"
 #include "semantics.h"
 #include "codegen.h"
 
-// Các biến toàn cục từ scanner.c
-extern TokenType Token;
+extern TokenType token;
 extern double    Num;
 extern char      Id[MAX_IDENT_LEN + 1];
 extern char      StringLiteral[MAX_STRING_LEN + 1];
 extern int       TokenLine;
 extern int       TokenColumn;
-extern char      CurrentSourceFile[260];
+extern char      currentSourceFile[260];
 
 static int pendingParamCount = 0;
 static int pendingParamIsRef[MAX_PROC_PARAMS];
@@ -103,10 +103,8 @@ static void initEmitLoadObjectAddress(Instruction *buf, int *count, int maxCount
     }
 }
 
-// ─── Tiện ích ────────────────────────────────────────────────────────────────
-
 void nextToken(void) {
-    Token = getToken();
+    token = getToken();
     // printf(" %s", TabToken[Token]);
     // if(Token == TK_IDENT) printf("(%s) \n", Id);
     // else if(Token == TK_NUMBER) printf("(%g) \n", Num);
@@ -117,7 +115,7 @@ void error(const char msg[]) {
     char tokenDetail[320];
     formatCurrentTokenDetail(tokenDetail, sizeof(tokenDetail));
     printf("Error at %s: %d:%d: %s%s\n",
-           CurrentSourceFile,
+           currentSourceFile,
            TokenLine,
            TokenColumn,
            msg,
@@ -125,11 +123,10 @@ void error(const char msg[]) {
     exit(1);
 }
 
-// Kiểm tra token hiện tại có khớp không, nếu có thì đọc token tiếp
 static void expect(TokenType expected) {
-    if (Token != expected) {
+    if (token != expected) {
         char msg[256];
-        snprintf(msg, sizeof(msg), "expected '%s' but got '%s'", TabToken[expected], TabToken[Token]);
+        snprintf(msg, sizeof(msg), "expected '%s' but got '%s'", TabToken[expected], TabToken[token]);
         error(msg);
     }
     nextToken();
@@ -140,7 +137,7 @@ static void formatCurrentTokenDetail(char *buf, size_t bufSize) {
         return;
     }
     buf[0] = '\0';
-    switch (Token) {
+    switch (token) {
         case TK_IDENT:
             snprintf(buf, bufSize, " near identifier '%s'", Id);
             break;
@@ -154,32 +151,32 @@ static void formatCurrentTokenDetail(char *buf, size_t bufSize) {
             snprintf(buf, bufSize, " near end of file");
             break;
         default:
-            snprintf(buf, bufSize, " near token '%s'", TabToken[Token]);
+            snprintf(buf, bufSize, " near token '%s'", TabToken[token]);
             break;
     }
 }
 
 static double parseVarInitializerValue(void) {
     int sign = 1;
-    if (Token == SB_PLUS || Token == SB_MINUS) {
-        if (Token == SB_MINUS) {
+    if (token == SB_PLUS || token == SB_MINUS) {
+        if (token == SB_MINUS) {
             sign = -1;
         }
         nextToken();
     }
 
-    if (Token == TK_NUMBER) {
+    if (token == TK_NUMBER) {
         double value = Num;
         nextToken();
         return sign * value;
     }
 
-    if (Token == KW_NULL) {
+    if (token == KW_NULL) {
         nextToken();
         return 0;
     }
 
-    if (Token == TK_IDENT) {
+    if (token == TK_IDENT) {
         Object *obj = lookup(Id);
         if (obj == NULL) {
             char msg[120];
@@ -199,7 +196,7 @@ static double parseVarInitializerValue(void) {
 }
 
 static double parseConstFactor(void) {
-    if (Token == KW_SIZEOF) {
+    if (token == KW_SIZEOF) {
         nextToken();
         Object *obj = parseSizeOfTargetObject(1);
         int dims = expectedArrayDims(obj);
@@ -221,7 +218,7 @@ static double parseConstFactor(void) {
                 if (used > 0) {
                     error("SIZEOF: STRING variable does not support index");
                 }
-                return (double)((obj->size > 0) ? obj->size : 1);
+                return obj->size > 0 ? obj->size : 1;
             }
             if (used > dims) {
                 error("SIZEOF: too many indices");
@@ -243,9 +240,9 @@ static double parseConstFactor(void) {
                     if (!knownRem) {
                         rem = 1;
                     }
-                    return (double)rem;
+                    return rem;
                 }
-                return (used == 0) ? (double)obj->size : 1;
+                return used == 0 ? (double)obj->size : 1;
             }
             return 1;
         }
@@ -253,18 +250,18 @@ static double parseConstFactor(void) {
         return 0;
     }
 
-    if (Token == TK_NUMBER) {
+    if (token == TK_NUMBER) {
         double value = Num;
         nextToken();
         return value;
     }
 
-    if (Token == KW_NULL) {
+    if (token == KW_NULL) {
         nextToken();
         return 0;
     }
 
-    if (Token == TK_IDENT) {
+    if (token == TK_IDENT) {
         Object *obj = lookup(Id);
         char identName[MAX_IDENT_LEN + 1];
         strcpy(identName, Id);
@@ -275,7 +272,7 @@ static double parseConstFactor(void) {
         }
         nextToken();
         if (obj->type == OBJ_PROCEDURE) {
-            if (Token == SB_LPARENT) {
+            if (token == SB_LPARENT) {
                 error("CONST initializer cannot call procedure");
             }
             error("CONST initializer requires numeric constant expression");
@@ -286,7 +283,7 @@ static double parseConstFactor(void) {
         return obj->value;
     }
 
-    if (Token == SB_LPARENT) {
+    if (token == SB_LPARENT) {
         nextToken();
         double value = parseConstExpression();
         expect(SB_RPARENT);
@@ -299,17 +296,27 @@ static double parseConstFactor(void) {
 
 static double parseConstTerm(void) {
     double value = parseConstFactor();
-    while (Token == SB_TIMES || Token == SB_SLASH) {
-        TokenType op = Token;
+    while (token == SB_TIMES || token == SB_SLASH || token == SB_FLOORDIV || token == SB_PERCENT) {
+        TokenType op = token;
         nextToken();
         double rhs = parseConstFactor();
         if (op == SB_TIMES) {
             value *= rhs;
-        } else {
+        } else if (op == SB_SLASH) {
             if (rhs == 0) {
                 error("CONST initializer division by zero");
             }
             value /= rhs;
+        } else if (op == SB_FLOORDIV) {
+            if (rhs == 0) {
+                error("CONST initializer division by zero");
+            }
+            value = floor(value / rhs);
+        } else {
+            if (rhs == 0) {
+                error("CONST initializer modulo by zero");
+            }
+            value = (double)((int)value % (int)rhs);
         }
     }
     return value;
@@ -317,8 +324,8 @@ static double parseConstTerm(void) {
 
 static double parseConstExpression(void) {
     TokenType prefix = TK_NONE;
-    if (Token == SB_PLUS || Token == SB_MINUS) {
-        prefix = Token;
+    if (token == SB_PLUS || token == SB_MINUS) {
+        prefix = token;
         nextToken();
     }
 
@@ -327,8 +334,8 @@ static double parseConstExpression(void) {
         value = -value;
     }
 
-    while (Token == SB_PLUS || Token == SB_MINUS) {
-        TokenType op = Token;
+    while (token == SB_PLUS || token == SB_MINUS) {
+        TokenType op = token;
         nextToken();
         double rhs = parseConstTerm();
         value = (op == SB_PLUS) ? (value + rhs) : (value - rhs);
@@ -339,9 +346,9 @@ static double parseConstExpression(void) {
 // Parse nested numeric array literals like [1, [2, 3], 4] into a flat row-major list.
 static void parseConstArrayLiteralValues(double *values, int *count, int maxCount) {
     expect(SB_LBRACK);
-    if (Token != SB_RBRACK) {
+    if (token != SB_RBRACK) {
         while (1) {
-            if (Token == SB_LBRACK) {
+            if (token == SB_LBRACK) {
                 parseConstArrayLiteralValues(values, count, maxCount);
             } else {
                 if (*count >= maxCount) {
@@ -349,7 +356,7 @@ static void parseConstArrayLiteralValues(double *values, int *count, int maxCoun
                 }
                 values[(*count)++] = parseConstExpression();
             }
-            if (Token == SB_COMMA) {
+            if (token == SB_COMMA) {
                 nextToken();
                 continue;
             }
@@ -361,9 +368,9 @@ static void parseConstArrayLiteralValues(double *values, int *count, int maxCoun
 
 static void parseVarArrayLiteralValues(double *values, int *count, int maxCount) {
     expect(SB_LBRACK);
-    if (Token != SB_RBRACK) {
+    if (token != SB_RBRACK) {
         while (1) {
-            if (Token == SB_LBRACK) {
+            if (token == SB_LBRACK) {
                 parseVarArrayLiteralValues(values, count, maxCount);
             } else {
                 if (*count >= maxCount) {
@@ -371,7 +378,7 @@ static void parseVarArrayLiteralValues(double *values, int *count, int maxCount)
                 }
                 values[(*count)++] = parseVarInitializerValue();
             }
-            if (Token == SB_COMMA) {
+            if (token == SB_COMMA) {
                 nextToken();
                 continue;
             }
@@ -384,7 +391,7 @@ static void parseVarArrayLiteralValues(double *values, int *count, int maxCount)
 static Object *parseSizeOfTargetObject(int constMode) {
     sizeofIndexDepth = 0;
     expect(SB_LPARENT);
-    if (Token != TK_IDENT) {
+    if (token != TK_IDENT) {
         error("SIZEOF: expected identifier");
     }
     Object *obj = lookup(Id);
@@ -395,7 +402,7 @@ static Object *parseSizeOfTargetObject(int constMode) {
     }
     nextToken();
 
-    while (Token == SB_LBRACK) {
+    while (token == SB_LBRACK) {
         nextToken();
         if (constMode) {
             (void)parseConstExpression();
@@ -412,19 +419,19 @@ static Object *parseSizeOfTargetObject(int constMode) {
 }
 
 static void parseInitFactor(Instruction *buf, int *count, int maxCount) {
-    if (Token == TK_NUMBER) {
+    if (token == TK_NUMBER) {
         initEmit(buf, count, maxCount, LIT, 0, Num);
         nextToken();
         return;
     }
 
-    if (Token == KW_NULL) {
+    if (token == KW_NULL) {
         initEmit(buf, count, maxCount, LIT, 0, 0);
         nextToken();
         return;
     }
 
-    if (Token == KW_SIZEOF) {
+    if (token == KW_SIZEOF) {
         nextToken();
         Object *obj = parseSizeOfTargetObject(0);
         int dims = expectedArrayDims(obj);
@@ -523,7 +530,7 @@ static void parseInitFactor(Instruction *buf, int *count, int maxCount) {
         return;
     }
 
-    if (Token == TK_IDENT) {
+    if (token == TK_IDENT) {
         Object *obj = lookup(Id);
         if (obj == NULL) {
             char msg[120];
@@ -555,14 +562,14 @@ static void parseInitFactor(Instruction *buf, int *count, int maxCount) {
         }
 
         nextToken();
-        if (Token == SB_LBRACK) {
+        if (token == SB_LBRACK) {
             if (!isArrayLikeObject(obj)) {
                 error("initializer indexed access requires array variable");
             }
             initEmitLoadObjectAddress(buf, count, maxCount, obj);
             int used = 0;
             int dims = expectedArrayDims(obj);
-            while (Token == SB_LBRACK) {
+            while (token == SB_LBRACK) {
                 nextToken();
                 parseInitExpression(buf, count, maxCount);
                 expect(SB_RBRACK);
@@ -603,7 +610,7 @@ static void parseInitFactor(Instruction *buf, int *count, int maxCount) {
         return;
     }
 
-    if (Token == SB_LPARENT) {
+    if (token == SB_LPARENT) {
         nextToken();
         parseInitExpression(buf, count, maxCount);
         expect(SB_RPARENT);
@@ -615,26 +622,27 @@ static void parseInitFactor(Instruction *buf, int *count, int maxCount) {
 
 static void parseInitTerm(Instruction *buf, int *count, int maxCount) {
     parseInitFactor(buf, count, maxCount);
-    while (Token == SB_TIMES || Token == SB_SLASH) {
-        TokenType op = Token;
+    while (token == SB_TIMES || token == SB_SLASH || token == SB_FLOORDIV || token == SB_PERCENT) {
+        TokenType op = token;
         nextToken();
         parseInitFactor(buf, count, maxCount);
-        initEmit(buf, count, maxCount, OPR, 0, op == SB_TIMES ? 4 : 5);
+        initEmit(buf, count, maxCount, OPR, 0,
+                 op == SB_TIMES ? 4 : (op == SB_SLASH ? 5 : (op == SB_FLOORDIV ? 23 : 14)));
     }
 }
 
 static void parseInitExpression(Instruction *buf, int *count, int maxCount) {
     TokenType prefix = TK_NONE;
-    if (Token == SB_PLUS || Token == SB_MINUS) {
-        prefix = Token;
+    if (token == SB_PLUS || token == SB_MINUS) {
+        prefix = token;
         nextToken();
     }
     parseInitTerm(buf, count, maxCount);
     if (prefix == SB_MINUS) {
         initEmit(buf, count, maxCount, OPR, 0, 1);
     }
-    while (Token == SB_PLUS || Token == SB_MINUS) {
-        TokenType op = Token;
+    while (token == SB_PLUS || token == SB_MINUS) {
+        TokenType op = token;
         nextToken();
         parseInitTerm(buf, count, maxCount);
         initEmit(buf, count, maxCount, OPR, 0, op == SB_PLUS ? 2 : 3);
@@ -684,7 +692,32 @@ static void emitLoadArrayDim(const Object *obj, int dimIndex) {
         emit(LOD, getCurrentLevel() - obj->level, obj->lengthAddress);
         return;
     }
-    error("array dimension is not available at runtime");
+    if (dimIndex == 0 && obj->size > 0) {
+        emit(LIT, 0, obj->size);
+        return;
+    }
+    emit(LIT, 0, 0);
+}
+
+static void emitPrintArray(const Object *obj) {
+    int rank = expectedArrayDims(obj);
+    if (rank <= 0) rank = 1;
+    emitLoadObjectAddress(obj);
+    for (int d = 0; d < rank; d++) {
+        emitLoadArrayDim(obj, d);
+    }
+    emit(WRA, rank, 0);
+}
+
+static void emitAppendArrayToString(const Object *target, const Object *obj) {
+    emitLoadObjectAddress(target);
+    emitLoadObjectAddress(obj);
+    int rank = expectedArrayDims(obj);
+    if (rank <= 0) rank = 1;
+    for (int d = 0; d < rank; d++) {
+        emitLoadArrayDim(obj, d);
+    }
+    emit(CATA, rank, 0);
 }
 
 // Parses one or more [expr] suffixes and emits flattened row-major addressing.
@@ -694,7 +727,7 @@ static int emitIndexedAddress(const Object *obj, int requireIndex, int requireFu
     int i;
 
     emitLoadObjectAddress(obj);
-    while (Token == SB_LBRACK) {
+    while (token == SB_LBRACK) {
         nextToken();
         expression();
         expect(SB_RBRACK);
@@ -708,6 +741,10 @@ static int emitIndexedAddress(const Object *obj, int requireIndex, int requireFu
             snprintf(msg, sizeof(msg), "%s: too many indices", context);
             error(msg);
         }
+
+        // Check index bounds for the current dimension (used - 1)
+        emitLoadArrayDim(obj, used - 1);
+        emit(CHK, 0, 0);
 
         if (obj->dimCount > 0 && used < obj->dimCount) {
             for (i = used; i < obj->dimCount; i++) {
@@ -833,15 +870,15 @@ static void emitSizeOfObjectValue(const Object *obj) {
 
 static void parseProcedureCallArguments(const Object *proc) {
     int argCount = 0;
-    if (Token == SB_LPARENT) {
+    if (token == SB_LPARENT) {
         nextToken();
-        if (Token != SB_RPARENT) {
+        if (token != SB_RPARENT) {
             while (1) {
                 if (argCount >= proc->paramCount) {
                     error("Too many arguments in CALL");
                 }
                 if (proc->paramDimCount[argCount] > 0 || proc->paramSize[argCount] > 1) {
-                    if (Token != TK_IDENT) {
+                    if (token != TK_IDENT) {
                         error("Array parameter requires identifier argument");
                     }
                     Object *arg = lookup(Id);
@@ -874,7 +911,7 @@ static void parseProcedureCallArguments(const Object *proc) {
                             error("Array parameter requires array variable argument");
                         }
                         nextToken();
-                        if (Token == SB_LBRACK) {
+                        if (token == SB_LBRACK) {
                             error("Array parameter requires whole array argument, not indexed element");
                         }
                         emitLoadObjectAddress(arg);
@@ -917,12 +954,14 @@ static void parseProcedureCallArguments(const Object *proc) {
                             emit(LIT, 0, actualDim);
                         } else if (actualFromProc) {
                             emit(LRD, 0, d);
+                        } else if (arg != NULL && isArrayLikeObject(arg)) {
+                            emitLoadArrayDim(arg, d);
                         } else {
                             emit(LIT, 0, 0);
                         }
                     }
                 } else if (proc->paramIsRef[argCount]) {
-                    if (Token != TK_IDENT) {
+                    if (token != TK_IDENT) {
                         error("VAR parameter requires assignable identifier argument");
                     }
                     Object *arg = lookup(Id);
@@ -932,7 +971,7 @@ static void parseProcedureCallArguments(const Object *proc) {
                     nextToken();
 
                     int indexedArg = 0;
-                    if (Token == SB_LBRACK) {
+                    if (token == SB_LBRACK) {
                         indexedArg = 1;
                         if (!isArrayLikeObject(arg)) {
                             error("Indexed VAR argument requires array variable");
@@ -947,10 +986,10 @@ static void parseProcedureCallArguments(const Object *proc) {
                         emitLoadObjectAddress(arg);
                     }
                 } else {
-                    if (Token == TK_STRING) {
+                    if (token == TK_STRING) {
                         emit(LIT, 0, addStringLiteral(StringLiteral));
                         nextToken();
-                    } else if (Token == TK_IDENT) {
+                    } else if (token == TK_IDENT) {
                         Object *argObj = lookup(Id);
                         if (argObj != NULL && argObj->type == OBJ_CONSTANT && argObj->constIsString) {
                             emit(LIT, 0, addStringLiteral(argObj->constString));
@@ -966,7 +1005,7 @@ static void parseProcedureCallArguments(const Object *proc) {
                     }
                 }
                 argCount++;
-                if (Token == SB_COMMA) {
+                if (token == SB_COMMA) {
                     nextToken();
                     continue;
                 }
@@ -1178,6 +1217,8 @@ static void interpParseFactor(void) {
                 if (dims > 0 && used > dims) {
                     error("interpolation: too many array indices");
                 }
+                emitLoadArrayDim(obj, used - 1);
+                emit(CHK, 0, 0);
                 if (!(obj->isRuntimeArray || obj->lengthAddress >= 0) && obj->dimCount > 0 && used < obj->dimCount) {
                     int stride = 1;
                     int knownStride = 1;
@@ -1229,10 +1270,18 @@ static void interpParseTerm(void) {
             interpExprPtr++;
             interpParseFactor();
             emit(OPR, 0, 4);
+        } else if (*interpExprPtr == '/' && *(interpExprPtr + 1) == '/') {
+            interpExprPtr += 2;
+            interpParseFactor();
+            emit(OPR, 0, 23);
         } else if (*interpExprPtr == '/') {
             interpExprPtr++;
             interpParseFactor();
             emit(OPR, 0, 5);
+        } else if (*interpExprPtr == '%') {
+            interpExprPtr++;
+            interpParseFactor();
+            emit(OPR, 0, 14);
         } else {
             break;
         }
@@ -1308,6 +1357,8 @@ static void emitInterpolatedBracedValue(const char *text, int len) {
                 if (obj->type == OBJ_CONSTANT) {
                     if (obj->constIsString) {
                         emit(WRL, 0, addStringLiteral(obj->constString));
+                    } else if (isArrayLikeObject(obj)) {
+                        emitPrintArray(obj);
                     } else {
                         emit(LIT, 0, obj->value);
                         emit(WRI, 0, 0);
@@ -1319,7 +1370,8 @@ static void emitInterpolatedBracedValue(const char *text, int len) {
                     return;
                 }
                 if (isArrayLikeObject(obj)) {
-                    error("interpolation: array requires explicit index in expression");
+                    emitPrintArray(obj);
+                    return;
                 }
                 emitLoadObjectValue(obj);
                 emit(WRI, 0, 0);
@@ -1342,101 +1394,56 @@ static void emitInterpolatedBracedValue(const char *text, int len) {
 static void emitInterpolatedString(const char *literal);
 
 static void emitWriteAtom(void) {
-    if (Token == TK_STRING) {
+    if (token == TK_STRING) {
         emitInterpolatedString(StringLiteral);
         nextToken();
-    } else if (Token == TK_NUMBER) {
-        emit(LIT, 0, Num);
-        emit(WRI, 0, 0);
-        nextToken();
-    } else if (Token == TK_IDENT) {
-        Object *obj = lookup(Id);
-        if (obj == NULL) {
-            char msg[100];
-            sprintf(msg, "Undeclared identifier: %s", Id);
-            error(msg);
-        }
-        if (obj->type == OBJ_PROCEDURE) {
-            nextToken();
-            parseProcedureCallArguments(obj);
-            if (!obj->hasReturnValue) {
-                error("Procedure does not return a value");
-            }
-            emit(CAL, getCurrentLevel() - obj->level, obj->address);
-            emit(WRI, 0, 0);
-            return;
-        }
-        if (obj->type == OBJ_CONSTANT) {
-            if (obj->constIsString) {
-                emit(WRL, 0, addStringLiteral(obj->constString));
-            } else {
-                emit(LIT, 0, obj->value);
-                emit(WRI, 0, 0);
-            }
-            nextToken();
-            return;
-        }
-
-        nextToken();
-        if (Token == SB_INC) {
-            if (obj->isString || isArrayLikeObject(obj)) {
-                error("Postfix increment in WRITE requires scalar numeric variable");
-            }
-            // Print old value, then commit increment.
-            emitLoadObjectValue(obj);
-            emitLoadObjectValue(obj);
-            emit(LIT, 0, 1);
-            emit(OPR, 0, 2);
-            emitStoreObjectValue(obj);
-            emit(WRI, 0, 0);
-            nextToken();
-            return;
-        }
-        if (isAssignableObject(obj) && obj->isString) {
-            if (Token == SB_LBRACK) {
-                error("WRITE/WRITELN of STRING variable does not take index");
-            }
-            emit(WRS, getCurrentLevel() - obj->level, obj->address);
-            return;
-        }
-
-        if (Token == SB_LBRACK) {
-            if (!isArrayLikeObject(obj)) {
-                error("Indexed WRITE requires an array variable");
-            }
-            (void)emitIndexedAddress(obj, 1, 1, "Indexed WRITE");
-            emit(LDI, 0, 0);
-            emit(WRI, 0, 0);
-        } else {
-            if (isArrayLikeObject(obj)) {
-                error("Array variable requires an index");
-            }
-            emitLoadObjectValue(obj);
-            emit(WRI, 0, 0);
-        }
-    } else {
-        expression();
-        emit(WRI, 0, 0);
+        return;
     }
+    if (token == TK_IDENT) {
+        Object *obj = lookup(Id);
+        if (obj != NULL) {
+            if (obj->type == OBJ_CONSTANT && obj->constIsString) {
+                emit(WRL, 0, addStringLiteral(obj->constString));
+                nextToken();
+                return;
+            }
+            if (isAssignableObject(obj) && obj->isString) {
+                nextToken();
+                if (token == SB_LBRACK) {
+                    error("WRITE/WRITELN of STRING variable does not take index");
+                }
+                emit(WRS, getCurrentLevel() - obj->level, obj->address);
+                return;
+            }
+            if (isArrayLikeObject(obj)) {
+                nextToken();
+                if (token != SB_LBRACK) {
+                    emitPrintArray(obj);
+                    return;
+                }
+                (void)emitIndexedAddress(obj, 1, 1, "Indexed WRITE");
+                emit(LDI, 0, 0);
+                emit(WRI, 0, 0);
+                return;
+            }
+        }
+    }
+    expression();
+    emit(WRI, 0, 0);
 }
 
-// ─── Phân tích biểu thức ─────────────────────────────────────────────────────
-
-// factor = NUMBER | IDENT | '(' expression ')'
 void factor(void) {
-    if (Token == TK_NUMBER) {
+    if (token == TK_NUMBER) {
         emit(LIT, 0, Num);
         nextToken();
-    } else if (Token == KW_NULL) {
+    } else if (token == KW_NULL) {
         emit(LIT, 0, 0);
         nextToken();
-    } else if (Token == KW_SIZEOF) {
+    } else if (token == KW_SIZEOF) {
         nextToken();
         Object *obj = parseSizeOfTargetObject(0);
         emitSizeOfObjectValue(obj);
-        return;
-    } else if (Token == TK_IDENT) {
-
+    } else if (token == TK_IDENT) {
         Object* obj = lookup(Id);
         if (obj == NULL) {
             char msg[100];
@@ -1462,7 +1469,7 @@ void factor(void) {
             error("Cannot use STRING variable in numeric expression");
         } else {
             nextToken();
-            if (Token == SB_INC) {
+            if (token == SB_INC) {
                 if (isArrayLikeObject(obj)) {
                     error("Postfix increment requires scalar variable");
                 }
@@ -1475,7 +1482,7 @@ void factor(void) {
                 nextToken();
                 return;
             }
-            if (Token == SB_LBRACK) {
+            if (token == SB_LBRACK) {
                 if (!isArrayLikeObject(obj)) {
                     error("Indexed access is only valid for arrays");
                 }
@@ -1490,19 +1497,19 @@ void factor(void) {
             }
             emitLoadObjectValue(obj);
         }
-    } else if (Token == SB_LPARENT) {
-        nextToken();                      // ăn '('
+    } else if (token == SB_LPARENT) {
+        nextToken();
         expression();
-        expect(SB_RPARENT);              // ăn ')'
+        expect(SB_RPARENT);
     } else {
         error("factor: expected number, identifier, or '('");
     }
 }
 
 static void unaryExpr(void) {
-    if (Token == SB_INC) {
+    if (token == SB_INC) {
         nextToken();
-        if (Token != TK_IDENT) {
+        if (token != TK_IDENT) {
             error("Prefix increment expects identifier");
         }
         Object *obj = lookup(Id);
@@ -1520,18 +1527,18 @@ static void unaryExpr(void) {
         emitLoadObjectValue(obj);
         return;
     }
-    if (Token == SB_PLUS) {
+    if (token == SB_PLUS) {
         nextToken();
         unaryExpr();
         return;
     }
-    if (Token == SB_MINUS) {
+    if (token == SB_MINUS) {
         nextToken();
         unaryExpr();
         emit(OPR, 0, 1);
         return;
     }
-    if (Token == SB_BITNOT) {
+    if (token == SB_BITNOT) {
         nextToken();
         unaryExpr();
         emit(OPR, 0, 17);
@@ -1540,23 +1547,24 @@ static void unaryExpr(void) {
     factor();
 }
 
-// term = unaryExpr { ('*' | '/' | '%') unaryExpr }
+// term = unaryExpr { ('*' | '/' | '//' | '%') unaryExpr }
 void term(void) {
     unaryExpr();
-    while (Token == SB_TIMES || Token == SB_SLASH || Token == SB_PERCENT) {
-        TokenType op = Token;
+    while (token == SB_TIMES || token == SB_SLASH || token == SB_FLOORDIV || token == SB_PERCENT) {
+        TokenType op = token;
         nextToken();
         unaryExpr();
         if (op == SB_TIMES) emit(OPR, 0, 4);
         else if (op == SB_SLASH) emit(OPR, 0, 5);
+        else if (op == SB_FLOORDIV) emit(OPR, 0, 23);
         else emit(OPR, 0, 14);
     }
 }
 
 static void additiveExpr(void) {
     term();
-    while (Token == SB_PLUS || Token == SB_MINUS) {
-        TokenType op = Token;
+    while (token == SB_PLUS || token == SB_MINUS) {
+        TokenType op = token;
         nextToken();
         term();
         emit(OPR, 0, (op == SB_PLUS) ? 2 : 3);
@@ -1565,8 +1573,8 @@ static void additiveExpr(void) {
 
 static void shiftExpr(void) {
     additiveExpr();
-    while (Token == SB_SHL || Token == SB_SHR) {
-        TokenType op = Token;
+    while (token == SB_SHL || token == SB_SHR) {
+        TokenType op = token;
         nextToken();
         additiveExpr();
         emit(OPR, 0, (op == SB_SHL) ? 18 : 19);
@@ -1575,7 +1583,7 @@ static void shiftExpr(void) {
 
 static void bitwiseAndExpr(void) {
     shiftExpr();
-    while (Token == SB_BITAND) {
+    while (token == SB_BITAND) {
         nextToken();
         shiftExpr();
         emit(OPR, 0, 15);
@@ -1584,7 +1592,7 @@ static void bitwiseAndExpr(void) {
 
 static void bitwiseXorExpr(void) {
     bitwiseAndExpr();
-    while (Token == SB_BITXOR) {
+    while (token == SB_BITXOR) {
         nextToken();
         bitwiseAndExpr();
         emit(OPR, 0, 16);
@@ -1594,7 +1602,7 @@ static void bitwiseXorExpr(void) {
 // expression now includes bitwise operators with C-like precedence.
 void expression(void) {
     bitwiseXorExpr();
-    while (Token == SB_BITOR) {
+    while (token == SB_BITOR) {
         nextToken();
         bitwiseXorExpr();
         emit(OPR, 0, 13);
@@ -1602,19 +1610,19 @@ void expression(void) {
 }
 
 static void conditionFactor(void) {
-    if (Token == KW_NOT) {
+    if (token == KW_NOT) {
         nextToken();
         conditionFactor();
         emit(OPR, 0, 22);
         return;
     }
-    if (Token == SB_LPARENT) {
+    if (token == SB_LPARENT) {
         nextToken();
         condition();
         expect(SB_RPARENT);
         return;
     }
-    if (Token == KW_ODD) {
+    if (token == KW_ODD) {
         nextToken();
         expression();
         emit(OPR, 0, 6);
@@ -1622,10 +1630,10 @@ static void conditionFactor(void) {
     }
 
     expression();
-    if (Token == SB_EQU || Token == SB_NEQ ||
-        Token == SB_LSS || Token == SB_LEQ ||
-        Token == SB_GTR || Token == SB_GEQ) {
-        TokenType op = Token;
+    if (token == SB_EQU || token == SB_NEQ ||
+        token == SB_LSS || token == SB_LEQ ||
+        token == SB_GTR || token == SB_GEQ) {
+        TokenType op = token;
         nextToken();
         expression();
         switch (op) {
@@ -1647,7 +1655,7 @@ static void conditionFactor(void) {
 
 static void conditionTerm(void) {
     conditionFactor();
-    while (Token == KW_AND) {
+    while (token == KW_AND) {
         nextToken();
         conditionFactor();
         emit(OPR, 0, 20);
@@ -1656,7 +1664,7 @@ static void conditionTerm(void) {
 
 void condition(void) {
     conditionTerm();
-    while (Token == KW_OR) {
+    while (token == KW_OR) {
         nextToken();
         conditionTerm();
         emit(OPR, 0, 21);
@@ -1730,6 +1738,8 @@ static void emitInterpolatedString(const char *literal) {
         if (obj->type == OBJ_CONSTANT) {
             if (obj->constIsString) {
                 emit(WRL, 0, addStringLiteral(obj->constString));
+            } else if (isArrayLikeObject(obj)) {
+                emitPrintArray(obj);
             } else {
                 emit(LIT, 0, obj->value);
                 emit(WRI, 0, 0);
@@ -1737,10 +1747,9 @@ static void emitInterpolatedString(const char *literal) {
         } else {
             if (obj->isString) {
                 emit(WRS, getCurrentLevel() - obj->level, obj->address);
+            } else if (isArrayLikeObject(obj)) {
+                emitPrintArray(obj);
             } else {
-                if (isArrayLikeObject(obj)) {
-                    error("Array placeholder requires explicit index in expression");
-                }
                 emitLoadObjectValue(obj);
                 emit(WRI, 0, 0);
             }
@@ -1762,9 +1771,9 @@ static void emitInterpolatedString(const char *literal) {
 //           | FOR IDENT ':=' expression TO expression DO statement
 //           | (rỗng)
 void statement(void) {
-    if (Token == SB_INC) {
+    if (token == SB_INC) {
         nextToken();
-        if (Token != TK_IDENT) {
+        if (token != TK_IDENT) {
             error("Prefix increment expects identifier");
         }
         Object *obj = lookup(Id);
@@ -1781,7 +1790,7 @@ void statement(void) {
         emitStoreObjectValue(obj);
         return;
 
-    } else if (Token == TK_IDENT) {
+    } else if (token == TK_IDENT) {
         // Allow implicit procedure call syntax: IDENT(...)
         Object* obj = lookup(Id);
         if (obj == NULL) {
@@ -1805,7 +1814,7 @@ void statement(void) {
         }
         nextToken();
 
-        if (Token == SB_INC) {
+        if (token == SB_INC) {
             if (obj->isString || isArrayLikeObject(obj)) {
                 error("Increment requires scalar numeric variable");
             }
@@ -1818,7 +1827,7 @@ void statement(void) {
         }
 
         int isIndexed = 0;
-        if (Token == SB_LBRACK) {
+        if (token == SB_LBRACK) {
             if (!isArrayLikeObject(obj)) {
                 error("Indexed assignment requires an array variable");
             }
@@ -1826,7 +1835,7 @@ void statement(void) {
             isIndexed = 1;
         }
 
-        TokenType assignOp = Token;
+        TokenType assignOp = token;
         if (assignOp != SB_ASSIGN &&
             assignOp != SB_ADD_ASSIGN && assignOp != SB_SUB_ASSIGN &&
             assignOp != SB_MUL_ASSIGN && assignOp != SB_DIV_ASSIGN &&
@@ -1847,7 +1856,7 @@ void statement(void) {
             emitLoadObjectAddress(obj);
             emit(SCLR, 0, 0);
             emitAppendStringTerm(obj);
-            while (Token == SB_PLUS) {
+            while (token == SB_PLUS) {
                 nextToken();
                 emitAppendStringTerm(obj);
             }
@@ -1905,91 +1914,78 @@ void statement(void) {
                 }
             }
         }
-
-    } else if (Token == KW_READ || Token == KW_WRITE || Token == KW_WRITELN) {
-        error("Use CALL before READ/READLN/WRITE/WRITELN");
-
-    } else if (Token == KW_CALL) {
-        // CALL can invoke built-ins (READ/WRITE/WRITELN) and user procedures.
+    } else if (token == KW_READ) {
         nextToken();
-        if (Token == KW_READ) {
-            nextToken();
-            expect(SB_LPARENT);
-            if (Token != TK_IDENT) {
-                error("CALL READ: expected identifier");
-            }
-            Object *obj = lookup(Id);
-            if (obj == NULL || !isAssignableObject(obj)) {
-                error("CALL READ: variable required");
-            }
-            if (obj->isString) {
-                error("CALL READ currently supports only integer variables");
-            }
-            nextToken();
-            if (Token == SB_LBRACK) {
-                if (!isArrayLikeObject(obj)) {
-                    error("CALL READ: indexed target requires array variable");
-                }
-                (void)emitIndexedAddress(obj, 1, 1, "CALL READ indexed target");
-            } else {
-                if (isArrayLikeObject(obj)) {
-                    error("CALL READ: array variable requires an index");
-                }
-                emitLoadObjectAddress(obj);
-            }
-            expect(SB_RPARENT);
-            emit(RDI, 0, 0);
-
-        } else if (Token == KW_WRITE || Token == KW_WRITELN) {
-            int withNewline = (Token == KW_WRITELN);
-            nextToken();
-            expect(SB_LPARENT);
-            if (Token != SB_RPARENT) {
-                emitWriteAtom();
-                while (Token == SB_PLUS) {
-                    nextToken();
-                    emitWriteAtom();
-                }
-            }
-            expect(SB_RPARENT);
-            if (withNewline) {
-                emit(WNL, 0, 0);
-            }
-
-        } else if (Token == TK_IDENT) {
-            Object* proc = lookup(Id);
-            if (proc == NULL) {
-                char msg[100];
-                sprintf(msg, "Undeclared identifier: %s", Id);
-                error(msg);
-            }
-            if (proc->type != OBJ_PROCEDURE) {
-                error("Cannot CALL a non-procedure");
-            }
-            nextToken();
-            parseProcedureCallArguments(proc);
-            emit(CAL, getCurrentLevel() - proc->level, proc->address);
-            if (proc->hasReturnValue) {
-                emit(POP, 0, 0);
-            }
-        } else {
-            error("CALL: expected procedure name or built-in");
+        expect(SB_LPARENT);
+        if (token != TK_IDENT) {
+            error("CALL READ: expected identifier");
         }
-
-    } else if (Token == KW_RETURN) {
+        Object *obj = lookup(Id);
+        if (obj == NULL || !isAssignableObject(obj)) {
+            error("CALL READ: variable required");
+        }
+        if (obj->isString) {
+            error("CALL READ currently supports only integer variables");
+        }
+        nextToken();
+        if (token == SB_LBRACK) {
+            if (!isArrayLikeObject(obj)) {
+                error("CALL READ: indexed target requires array variable");
+            }
+            emitIndexedAddress(obj, 1, 1, "CALL READ indexed target");
+        } else {
+            if (isArrayLikeObject(obj)) {
+                error("CALL READ: array variable requires an index");
+            }
+            emitLoadObjectAddress(obj);
+        }
+        expect(SB_RPARENT);
+        emit(RDI, 0, 0);
+    } else if (token == KW_WRITE || token == KW_WRITELN) {
+        int withNewline = token == KW_WRITELN;
+        nextToken();
+        expect(SB_LPARENT);
+        if (token != SB_RPARENT) {
+            emitWriteAtom();
+            while (token == SB_COMMA || token == SB_PLUS) {
+                nextToken();
+                emitWriteAtom();
+            }
+        }
+        expect(SB_RPARENT);
+        if (withNewline) {
+            emit(WNL, 0, 0);
+        }
+    } else if (token == TK_IDENT) {
+        Object* proc = lookup(Id);
+        if (proc == NULL) {
+            char msg[100];
+            sprintf(msg, "Undeclared identifier: %s", Id);
+            error(msg);
+        }
+        if (proc->type != OBJ_PROCEDURE) {
+            error("Cannot CALL a non-procedure");
+        }
+        nextToken();
+        parseProcedureCallArguments(proc);
+        emit(CAL, getCurrentLevel() - proc->level, proc->address);
+        if (proc->hasReturnValue) {
+            emit(POP, 0, 0);
+        }
+    } else if (token == KW_RETURN) {
         if (currentProcedure == NULL) {
             error("RETURN is only valid inside a procedure");
         }
         nextToken();
-        if (Token == SB_SEMICOLON || Token == KW_END) {
+        if (token == SB_SEMICOLON || token == KW_END) {
             emit(OPR, 0, 0);
         } else {
-            if (Token == TK_IDENT) {
+            if (token == TK_IDENT) {
                 Object *retObj = lookup(Id);
                 if (retObj != NULL && (retObj->type == OBJ_VARIABLE || retObj->type == OBJ_PARAMETER) && isArrayLikeObject(retObj)) {
                     int retDims = expectedArrayDims(retObj);
                     nextToken();
-                    if (Token == SB_LBRACK) {
+                    if (token == SB_LBRACK) {
                         error("RETURN array requires whole array value, not indexed element");
                     }
                     emitLoadObjectAddress(retObj);
@@ -2040,25 +2036,23 @@ void statement(void) {
             currentProcedure->hasReturnValue = 1;
         }
 
-    } else if (Token == KW_BEGIN) {
-        // Khối: BEGIN statement { ';' statement } END
+    } else if (token == KW_BEGIN) {
         nextToken();
         statement();
-        while (Token == SB_SEMICOLON) {
+        while (token == SB_SEMICOLON) {
             nextToken();
             statement();
         }
         expect(KW_END);
 
-    } else if (Token == KW_IF) {
-        // Rẽ nhánh: IF condition THEN statement [ ELSE statement ]
+    } else if (token == KW_IF) {
         nextToken();
         condition();
         int cx1 = cx;
         emit(JPC, 0, 0);
         expect(KW_THEN);
         statement();
-        if (Token == KW_ELSE) {
+        if (token == KW_ELSE) {
             nextToken();
             int cx2 = cx;
             emit(JMP, 0, 0);
@@ -2069,8 +2063,7 @@ void statement(void) {
             code[cx1].a = cx;
         }
 
-    } else if (Token == KW_WHILE) {
-        // Vòng lặp: WHILE condition DO statement
+    } else if (token == KW_WHILE) {
         int cx1 = cx;
         nextToken();
         condition();
@@ -2081,11 +2074,9 @@ void statement(void) {
         emit(JMP, 0, cx1);
         code[cx2].a = cx;
 
-    } else if (Token == KW_FOR) {
-        // FOR IDENT ':=' expr (TO|DOWNTO) expr [STEP expr] DO statement
-        // STEP defaults to 1. Bound/step expressions are re-evaluated each iteration.
+    } else if (token == KW_FOR) {
         nextToken();
-        if (Token != TK_IDENT) error("statement: expected identifier after FOR");
+        if (token != TK_IDENT) error("statement: expected identifier after FOR");
         Object* obj = lookup(Id);
         if (obj == NULL || obj->type != OBJ_VARIABLE || obj->isString || isArrayLikeObject(obj)) {
             error("FOR: scalar integer variable required");
@@ -2096,10 +2087,10 @@ void statement(void) {
         emit(STO, getCurrentLevel() - obj->level, obj->address);
 
         int isDownTo = 0;
-        if (Token == KW_TO) {
+        if (token == KW_TO) {
             isDownTo = 0;
             nextToken();
-        } else if (Token == KW_DOWNTO) {
+        } else if (token == KW_DOWNTO) {
             isDownTo = 1;
             nextToken();
         } else {
@@ -2112,7 +2103,7 @@ void statement(void) {
 
         Instruction stepExpr[MAX_INIT_EXPR_CODE];
         int stepExprCount = 0;
-        if (Token == KW_STEP) {
+        if (token == KW_STEP) {
             nextToken();
             parseInitExpression(stepExpr, &stepExprCount, MAX_INIT_EXPR_CODE);
         } else {
@@ -2130,7 +2121,6 @@ void statement(void) {
         expect(KW_DO);
         statement();
 
-        // i := i +/- step
         emit(LOD, getCurrentLevel() - obj->level, obj->address);
         for (int i = 0; i < stepExprCount; i++) {
             emit(stepExpr[i].op, stepExpr[i].l, stepExpr[i].a);
@@ -2142,10 +2132,6 @@ void statement(void) {
     }
 }
 
-// ─── Phân tích khối ──────────────────────────────────────────────────────────
-
-// block = { CONST-section | VAR-section | PROCEDURE-section }
-//         statement
 void block(void) {
     enterBlock();
     int frameIdx = getCurrentLevel() - 1;
@@ -2165,9 +2151,9 @@ void block(void) {
         for (int i = 0; i < pendingParamCount; i++) {
             enter(pendingParamName[i], OBJ_PARAMETER, 0, pendingParamSize[i], 0);
             Object *param = lookup(pendingParamName[i]);
-            param->address = slotCursor; // arguments are below base pointer
+            param->address = slotCursor;
             if (!pendingParamIsRef[i] && pendingParamDimCount[i] > 0) {
-                param->size = 1; // pointer/reference value cell
+                param->size = 1;
             } else {
                 param->size = pendingParamSize[i];
             }
@@ -2186,12 +2172,11 @@ void block(void) {
         pendingParamLevel = -1;
     }
 
-    // Declarations can be mixed in any order before statements.
-    while (Token == KW_CONST || Token == KW_VAR || Token == KW_PROCEDURE) {
-        if (Token == KW_CONST) {
+    while (token == KW_CONST || token == KW_VAR || token == KW_PROCEDURE) {
+        if (token == KW_CONST) {
             nextToken();
             do {
-                if (Token != TK_IDENT) error("block: expected identifier in CONST");
+                if (token != TK_IDENT) error("block: expected identifier in CONST");
                 char name[MAX_IDENT_LEN + 1];
                 strcpy(name, Id);
                 nextToken();
@@ -2203,7 +2188,7 @@ void block(void) {
                     dims[d] = 0;
                 }
 
-                while (Token == SB_LBRACK) {
+                while (token == SB_LBRACK) {
                     nextToken();
                     if (dimCount >= MAX_ARRAY_DIMS) {
                         error("block: too many array dimensions");
@@ -2218,13 +2203,13 @@ void block(void) {
                     expect(SB_RBRACK);
                 }
 
-                if (Token != SB_EQU && Token != SB_ASSIGN) {
+                if (token != SB_EQU && token != SB_ASSIGN) {
                     error("block: expected '=' or ':=' in CONST");
                 }
                 nextToken();
 
                 if (dimCount > 0) {
-                    if (Token != SB_LBRACK) {
+                    if (token != SB_LBRACK) {
                         error("immutable array initializer must use bracket list");
                     }
                     if (pendingInitCount >= MAX_SYMBOL_TABLE_SIZE) {
@@ -2253,7 +2238,7 @@ void block(void) {
                     arrObj->initSize = pendingInit[pendingInitCount].arrayCount;
                     pendingInitCount++;
 
-                } else if (Token == TK_STRING) {
+                } else if (token == TK_STRING) {
                     enter(name, OBJ_CONSTANT, 0, 0, 0);
                     Object *obj = lookup(name);
                     obj->constIsString = 1;
@@ -2281,16 +2266,16 @@ void block(void) {
                         enter(name, OBJ_CONSTANT, value, 0, 0);
                     }
                 }
-                if (Token == SB_COMMA) nextToken(); else break;
+                if (token == SB_COMMA) nextToken(); else break;
             } while (1);
             expect(SB_SEMICOLON);
             continue;
         }
 
-        if (Token == KW_VAR) {
+        if (token == KW_VAR) {
             nextToken();
             do {
-                if (Token != TK_IDENT) error("block: expected identifier in VAR");
+                if (token != TK_IDENT) error("block: expected identifier in VAR");
                 char varName[MAX_IDENT_LEN + 1];
                 strcpy(varName, Id);
                 nextToken();
@@ -2307,12 +2292,12 @@ void block(void) {
                 for (int d = 0; d < MAX_ARRAY_DIMS; d++) {
                     runtimeDimExprCount[d] = 0;
                 }
-                if (Token == SB_LBRACK) {
+                if (token == SB_LBRACK) {
                     nextToken();
-                    if (Token == TK_NUMBER) {
+                    if (token == TK_NUMBER) {
                         double sizeValue = Num;
                         nextToken();
-                        if (Token == SB_RBRACK) {
+                        if (token == SB_RBRACK) {
                             if (sizeValue <= 0 || sizeValue != (double)((int)sizeValue)) {
                                 error("block: array size must be a positive integer expression");
                             }
@@ -2323,29 +2308,29 @@ void block(void) {
                             runtimeDimExprCount[0] = 0;
                             initEmit(runtimeDimExpr[0], &runtimeDimExprCount[0], MAX_INIT_EXPR_CODE, LIT, 0, sizeValue);
                             runtimeDimCount = 1;
-                            while (Token != SB_RBRACK) {
-                                if (Token == TK_NONE) {
+                            while (token != SB_RBRACK) {
+                                if (token == TK_NONE) {
                                     error("block: missing ']' in array declaration");
                                 }
-                                if (Token == SB_PLUS || Token == SB_MINUS || Token == SB_TIMES || Token == SB_SLASH) {
-                                    TokenType op = Token;
+                                if (token == SB_PLUS || token == SB_MINUS || token == SB_TIMES || token == SB_SLASH || token == SB_FLOORDIV || token == SB_PERCENT) {
+                                    TokenType op = token;
                                     nextToken();
                                     parseInitFactor(runtimeDimExpr[0], &runtimeDimExprCount[0], MAX_INIT_EXPR_CODE);
                                     initEmit(runtimeDimExpr[0], &runtimeDimExprCount[0], MAX_INIT_EXPR_CODE, OPR, 0,
-                                             op == SB_PLUS ? 2 : (op == SB_MINUS ? 3 : (op == SB_TIMES ? 4 : 5)));
+                                             op == SB_PLUS ? 2 : (op == SB_MINUS ? 3 : (op == SB_TIMES ? 4 : (op == SB_SLASH ? 5 : (op == SB_FLOORDIV ? 23 : 14)))));
                                 } else {
                                     error("block: invalid runtime array size expression");
                                 }
                             }
                         }
                     } else {
-                        if (Token == TK_IDENT) {
+                        if (token == TK_IDENT) {
                             Object *sizeObj = lookup(Id);
                             if (sizeObj != NULL && sizeObj->type == OBJ_CONSTANT && !sizeObj->constIsString) {
                                 char constName[MAX_IDENT_LEN + 1];
                                 strcpy(constName, Id);
                                 nextToken();
-                                if (Token == SB_RBRACK) {
+                                if (token == SB_RBRACK) {
                                     double sizeValue = sizeObj->value;
                                     if (sizeValue <= 0 || sizeValue != (double)((int)sizeValue)) {
                                         error("block: array size must be a positive integer expression");
@@ -2357,16 +2342,16 @@ void block(void) {
                                     runtimeDimExprCount[0] = 0;
                                     initEmit(runtimeDimExpr[0], &runtimeDimExprCount[0], MAX_INIT_EXPR_CODE, LIT, 0, sizeObj->value);
                                     runtimeDimCount = 1;
-                                    while (Token != SB_RBRACK) {
-                                        if (Token == TK_NONE) {
+                                    while (token != SB_RBRACK) {
+                                        if (token == TK_NONE) {
                                             error("block: missing ']' in array declaration");
                                         }
-                                        if (Token == SB_PLUS || Token == SB_MINUS || Token == SB_TIMES || Token == SB_SLASH) {
-                                            TokenType op = Token;
+                                        if (token == SB_PLUS || token == SB_MINUS || token == SB_TIMES || token == SB_SLASH || token == SB_FLOORDIV || token == SB_PERCENT) {
+                                            TokenType op = token;
                                             nextToken();
                                             parseInitFactor(runtimeDimExpr[0], &runtimeDimExprCount[0], MAX_INIT_EXPR_CODE);
                                             initEmit(runtimeDimExpr[0], &runtimeDimExprCount[0], MAX_INIT_EXPR_CODE, OPR, 0,
-                                                     op == SB_PLUS ? 2 : (op == SB_MINUS ? 3 : (op == SB_TIMES ? 4 : 5)));
+                                                     op == SB_PLUS ? 2 : (op == SB_MINUS ? 3 : (op == SB_TIMES ? 4 : (op == SB_SLASH ? 5 : (op == SB_FLOORDIV ? 23 : 14)))));
                                         } else {
                                             error("block: invalid runtime array size expression");
                                         }
@@ -2376,7 +2361,7 @@ void block(void) {
                                 isRuntimeArray = 1;
                                 parseInitExpression(runtimeDimExpr[0], &runtimeDimExprCount[0], MAX_INIT_EXPR_CODE);
                                 runtimeDimCount = 1;
-                                if (Token != SB_RBRACK) {
+                                if (token != SB_RBRACK) {
                                     error("block: invalid runtime array size expression");
                                 }
                             }
@@ -2384,14 +2369,14 @@ void block(void) {
                             isRuntimeArray = 1;
                             parseInitExpression(runtimeDimExpr[0], &runtimeDimExprCount[0], MAX_INIT_EXPR_CODE);
                             runtimeDimCount = 1;
-                            if (Token != SB_RBRACK) {
+                            if (token != SB_RBRACK) {
                                 error("block: invalid runtime array size expression");
                             }
                         }
                     }
                     expect(SB_RBRACK);
 
-                    while (Token == SB_LBRACK) {
+                    while (token == SB_LBRACK) {
                         if (dimCount >= MAX_ARRAY_DIMS) {
                             error("block: too many array dimensions");
                         }
@@ -2456,7 +2441,7 @@ void block(void) {
                     }
                 }
 
-                if (Token == SB_EQU || Token == SB_ASSIGN) {
+                if (token == SB_EQU || token == SB_ASSIGN) {
                     nextToken();
                     if (pendingInitCount >= MAX_SYMBOL_TABLE_SIZE) {
                         error("too many variable initializers in block");
@@ -2469,7 +2454,7 @@ void block(void) {
                     if (isRuntimeArray) {
                         error("Runtime-sized arrays do not support initializer lists");
                     } else if (size > 1) {
-                        if (Token != SB_LBRACK) {
+                        if (token != SB_LBRACK) {
                             error("Array initializer must use bracket list, e.g. VAR A[4] := [1,2]");
                         }
                         pendingInit[pendingInitCount].kind = VAR_INIT_ARRAY_LITERAL;
@@ -2492,7 +2477,7 @@ void block(void) {
                     pendingInitCount++;
                 }
 
-                if (Token == SB_COMMA) nextToken(); else break;
+                if (token == SB_COMMA) nextToken(); else break;
             } while (1);
             expect(SB_SEMICOLON);
             continue;
@@ -2500,7 +2485,7 @@ void block(void) {
 
         // PROCEDURE declaration
         nextToken();
-        if (Token != TK_IDENT) error("block: expected identifier after PROCEDURE");
+        if (token != TK_IDENT) error("block: expected identifier after PROCEDURE");
         char procName[MAX_IDENT_LEN + 1];
         strcpy(procName, Id);
         enter(procName, OBJ_PROCEDURE, 0, 0, 0);
@@ -2508,16 +2493,16 @@ void block(void) {
         nextToken();
 
         pendingParamCount = 0;
-        if (Token == SB_LPARENT) {
+        if (token == SB_LPARENT) {
             nextToken();
-            if (Token != SB_RPARENT) {
+            if (token != SB_RPARENT) {
                 while (1) {
                     int isRef = 0;
-                    if (Token == KW_VAR) {
+                    if (token == KW_VAR) {
                         isRef = 1;
                         nextToken();
                     }
-                    if (Token != TK_IDENT) {
+                    if (token != TK_IDENT) {
                         error("procedure parameter: expected identifier");
                     }
                     if (pendingParamCount >= MAX_PROC_PARAMS) {
@@ -2531,15 +2516,15 @@ void block(void) {
                     }
                     strcpy(pendingParamName[pendingParamCount], Id);
                     nextToken();
-                    if (Token == SB_LBRACK) {
+                    if (token == SB_LBRACK) {
                         int totalSize = 1;
                         int hasUnsizedDim = 0;
-                        while (Token == SB_LBRACK) {
+                        while (token == SB_LBRACK) {
                             if (paramDimCount >= MAX_ARRAY_DIMS) {
                                 error("too many array dimensions in parameter");
                             }
                             nextToken();
-                            if (Token == SB_RBRACK) {
+                            if (token == SB_RBRACK) {
                                 hasUnsizedDim = 1;
                                 paramDims[paramDimCount++] = 0;
                                 nextToken();
@@ -2571,7 +2556,7 @@ void block(void) {
                     }
                     pendingParamCount++;
 
-                    if (Token == SB_COMMA || Token == SB_SEMICOLON) {
+                    if (token == SB_COMMA || token == SB_SEMICOLON) {
                         nextToken();
                         continue;
                     }
@@ -2597,7 +2582,7 @@ void block(void) {
     code[tx0].a = cx;
     emit(INT, 0, getVarCount() + 3);
 
-    // 1) Initialize scalar immutable/runtime values first (may feed VLA dimensions).
+    // Initialize scalar immutable/runtime values first (may feed VLA dimensions).
     for (int i = 0; i < pendingInitCount; i++) {
         if (pendingInit[i].kind == VAR_INIT_SCALAR_EXPR) {
             for (int k = 0; k < pendingInit[i].exprCount; k++) {
@@ -2609,7 +2594,7 @@ void block(void) {
         }
     }
 
-    // 2) Allocate runtime arrays once dependent scalars are initialized.
+    // Allocate runtime arrays once dependent scalars are initialized.
     for (int i = 0; i < pendingRuntimeArrayInitCount; i++) {
         Object *arrObj = pendingRuntimeArrayInit[i].target;
         int l = getCurrentLevel() - arrObj->level;
@@ -2629,7 +2614,7 @@ void block(void) {
         emit(STO, l, arrObj->address);
     }
 
-    // 3) Apply static array literal initializers after storage exists.
+    // Apply static array literal initializers after storage exists.
     for (int i = 0; i < pendingInitCount; i++) {
         if (pendingInit[i].kind == VAR_INIT_ARRAY_LITERAL) {
             for (int k = 0; k < pendingInit[i].arrayCount; k++) {
@@ -2646,50 +2631,50 @@ void block(void) {
     exitBlock();
 }
 
-// ─── Phân tích chương trình ──────────────────────────────────────────────────
-
-// program = PROGRAM ident ';' block '.'
 void program(void) {
     initSymbolTable();
     cx = 0;
-    expect(KW_PROGRAM);
-    if (Token != TK_IDENT) error("program: expected program name");
+    // expect(KW_PROGRAM);
+    if (token == KW_PROGRAM) {
+        nextToken();
+        if (token != TK_IDENT) {
+            error("program: expected program name");
+        }
+    }
     nextToken();
     expect(SB_SEMICOLON);
     block();
-    if (Token == SB_PERIOD) {
+    if (token == SB_PERIOD) {
         nextToken();
     }
-    if (Token != TK_NONE) {
+    if (token != TK_NONE) {
         error("program: unexpected token after '.'");
     }
-    // The current optimizer does not retarget jumps after folding,
-    // which can corrupt loop/branch control flow. Keep execution unoptimized.
-    // optimizeCode();
+    optimizeCode();
     // listCode();
     interpret();
 }
 
 static int tokenStartsStringValueExpr(void) {
-    if (Token == TK_STRING) {
+    if (token == TK_STRING) {
         return 1;
     }
-    if (Token == TK_IDENT) {
+    if (token == TK_IDENT) {
         Object *obj = lookup(Id);
-        return (obj != NULL && ((obj->type == OBJ_CONSTANT && obj->constIsString) || obj->isString));
+        return obj != NULL && ((obj->type == OBJ_CONSTANT && obj->constIsString) || obj->isString);
     }
     return 0;
 }
 
 static void emitAppendStringTerm(const Object *target) {
-    if (Token == TK_STRING) {
+    if (token == TK_STRING) {
         emitLoadObjectAddress(target);
         emit(CATL, 0, addStringLiteral(StringLiteral));
         nextToken();
         return;
     }
 
-    if (Token == TK_NUMBER) {
+    if (token == TK_NUMBER) {
         emitLoadObjectAddress(target);
         emit(LIT, 0, Num);
         emit(CATI, 0, 0);
@@ -2697,7 +2682,7 @@ static void emitAppendStringTerm(const Object *target) {
         return;
     }
 
-    if (Token == SB_LPARENT) {
+    if (token == SB_LPARENT) {
         emitLoadObjectAddress(target);
         nextToken();
         expression();
@@ -2706,7 +2691,7 @@ static void emitAppendStringTerm(const Object *target) {
         return;
     }
 
-    if (Token != TK_IDENT) {
+    if (token != TK_IDENT) {
         error("string expression: expected string or numeric term");
     }
 
@@ -2734,7 +2719,7 @@ static void emitAppendStringTerm(const Object *target) {
 
     nextToken();
     if (obj->isString) {
-        if (Token == SB_LBRACK) {
+        if (token == SB_LBRACK) {
             error("string expression: STRING variable does not take index");
         }
         emitLoadObjectAddress(target);
@@ -2743,19 +2728,21 @@ static void emitAppendStringTerm(const Object *target) {
         return;
     }
 
-    emitLoadObjectAddress(target);
-    if (Token == SB_LBRACK) {
+    if (token == SB_LBRACK) {
         if (!isArrayLikeObject(obj)) {
             error("string expression: indexed access requires array variable");
         }
+        emitLoadObjectAddress(target);
         (void)emitIndexedAddress(obj, 1, 1, "string expression indexed access");
         emit(LDI, 0, 0);
         emit(CATI, 0, 0);
     } else {
         if (isArrayLikeObject(obj)) {
-            error("string expression: array variable requires an index");
+            emitAppendArrayToString(target, obj);
+        } else {
+            emitLoadObjectAddress(target);
+            emitLoadObjectValue(obj);
+            emit(CATI, 0, 0);
         }
-        emitLoadObjectValue(obj);
-        emit(CATI, 0, 0);
     }
 }

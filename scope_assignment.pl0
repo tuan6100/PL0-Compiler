@@ -9,6 +9,6 @@ PROCEDURE P;
 
 BEGIN
   x := 2;
-  CALL P;
-  CALL WRITE(x);
+  P;
+  WRITE(x);
 END

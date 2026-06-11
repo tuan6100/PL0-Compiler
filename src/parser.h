@@ -1,31 +1,22 @@
 #ifndef PARSER_H
 #define PARSER_H
 
-// Lấy token tiếp theo và lưu vào biến toàn cục Token
-void nextToken(void);
+void nextToken();
 
-// Báo lỗi và dừng chương trình
 void error(const char msg[]);
 
-// Phân tích nhân tử: NUMBER | IDENT | '(' expression ')'
-void factor(void);
+void factor();
 
-// Phân tích số hạng: factor { ('*' | '/' | '%') factor }
-void term(void);
+void term();
 
-// Phân tích biểu thức: ['+' | '-'] term { ('+' | '-') term }
-void expression(void);
+void expression();
 
-// Phân tích điều kiện: ODD expression | expression ('='|'#'|'<'|'<='|'>'|'>=') expression
-void condition(void);
+void condition();
 
-// Phân tích câu lệnh
-void statement(void);
+void statement();
 
-// Phân tích khối: CONST, VAR, PROCEDURE, statement
-void block(void);
+void block();
 
-// Phân tích chương trình: PROGRAM ident ';' block '.'
-void program(void);
+void program();
 
 #endif

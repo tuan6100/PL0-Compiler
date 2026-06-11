@@ -9,10 +9,13 @@ CONST rows = SIZEOF(mat) / SIZEOF(mat[0]),
 VAR i, j;
 
 BEGIN
-    CALL WRITELN(SIZEOF(mat));
+    WRITELN(mat);
     FOR i := 0 TO rows - 1 DO
     BEGIN
-        FOR j := 0 TO cols - 1 DO CALL WRITE("${mat[i][j]} ");
-        CALL WRITELN();
+        FOR j := 0 TO cols - 1 DO
+        BEGIN
+            WRITE("${mat[i][j]} ");
+        END;
+        WRITELN();
     END;
 END.
