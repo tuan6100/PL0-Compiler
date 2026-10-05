@@ -1,0 +1,5 @@
+PROGRAM ERROR2;
+VAR x, x;
+BEGIN
+  x := 1
+END.

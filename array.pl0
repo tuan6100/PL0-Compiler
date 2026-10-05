@@ -1,0 +1,8 @@
+PROGRAM TEST;
+CONST LIMIT = 5;
+CONST array[LIMIT] = [1, 2, 3, 4, 5];
+
+BEGIN
+    WRITELN(array);
+    WRITELN(array[LIMIT]);
+END.

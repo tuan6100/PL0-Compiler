@@ -1,0 +1,9 @@
+PROGRAM StringConcat;
+CONST str1 = "abc", str2 = "def", num = 123;
+VAR str3[255];
+
+BEGIN
+    WRITELN("the Length of the string $str1 is ${SIZEOF(str1)}");
+    str3 := num + str1 + str2;
+    WRITELN("the Length of the string $str3 is ${SIZEOF(str3)}");
+END.

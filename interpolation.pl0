@@ -1,0 +1,7 @@
+PROGRAM T;
+CONST A = 10, B = 6, C = 2.5;
+BEGIN
+  WRITELN("a=" + a + ", b=" + b + ", c=" + c);
+  WRITELN("$a + $b * $c = ${a + b * c}")
+END.
+

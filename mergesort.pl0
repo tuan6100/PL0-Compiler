@@ -1,0 +1,57 @@
+PROGRAM MergeSort;
+
+PROCEDURE merge(arr[], left, mid, right);
+    VAR temp[right + 1], i := left, j := mid + 1, k := left;
+    BEGIN
+        FOR k := left TO right DO
+            temp[k] := arr[k];
+        k := left;
+        WHILE (i <= mid) AND (j <= right) DO
+            BEGIN
+                IF temp[i] <= temp[j] THEN
+                    BEGIN
+                        arr[k] := temp[i];
+                        i++;
+                        END
+                ELSE
+                    BEGIN
+                        arr[k] := temp[j];
+                        j++;
+                    END;
+                k++;
+            END;
+        WHILE i <= mid DO
+            BEGIN
+                arr[k] := temp[i];
+                i++;
+                k++;
+            END;
+        WHILE j <= right DO
+            BEGIN
+                arr[k] := temp[j];
+                j++;
+                k++;
+            END;
+    END;
+
+PROCEDURE sort(arr[], left, right);
+    VAR mid;
+    BEGIN
+        IF left < right THEN
+            BEGIN
+                mid := (left + right) // 2;
+                sort(arr, left, mid);
+                sort(arr, mid + 1, right);
+                merge(arr, left, mid, right);
+            END;
+    END;
+
+VAR arr[5] := [2, 4, 3, 5, 1], i;
+CONST n = SIZEOF(arr);
+BEGIN
+    writeln("Before sorting: $arr");
+    sort(arr, 0, n - 1);
+    writeln("After sorting: $arr");
+END.
+
+        

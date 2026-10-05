@@ -1,0 +1,6 @@
+ PROGRAM HelloWorld;
+VAR s[32];
+BEGIN
+  s := "Hello world";
+  WRITE(s);
+END

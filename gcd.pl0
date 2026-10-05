@@ -1,0 +1,16 @@
+PROGRAM GCD;
+
+PROCEDURE gcd(a; b; VAR c);
+    BEGIN
+        WHILE a <> b DO
+            IF a > b THEN a := a - b
+            ELSE b := b - a;
+        c := b;
+    END;
+
+CONST a = 10, b = 15;
+VAR c;
+BEGIN
+    gcd(a, b, c);
+    WRITELN("a = $a, b = $b, c = $c");
+END

@@ -1,0 +1,5 @@
+PROGRAM ERROR3;
+CONST c = 10;
+BEGIN
+  WRITE(++c);
+END.

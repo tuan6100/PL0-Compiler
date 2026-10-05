@@ -1,3 +1,2 @@
-cd src
-gcc main.c Scanner/scanner.c Parser/parser.c Semantic/semantic.c -o ../pl0.exe
+gcc -Wall -O3 src/*.c -lm -o pl0
 

@@ -1,0 +1,43 @@
+PROGRAM QuickSort;
+
+PROCEDURE swap(VAR x, VAR y);
+    VAR t;
+    BEGIN
+        t := x;
+        x := y;
+        y := t;
+    END;
+
+PROCEDURE partition(arr[], low, high);
+    VAR pivot := arr[high], i := low - 1, j;
+    BEGIN
+        FOR j := low TO high - 1 DO
+            BEGIN
+                IF arr[j] < pivot THEN
+                    BEGIN
+                        i := i + 1;
+                        swap(arr[i], arr[j]);
+                    END;
+            END;
+        swap(arr[i + 1], arr[high]);
+        RETURN i + 1;
+    END;
+
+PROCEDURE sort(arr[], low, high);
+    VAR pivot;
+    BEGIN
+        IF low < high THEN
+            BEGIN
+                pivot := partition(arr, low, high);
+                sort(arr, low, pivot - 1);
+                sort(arr, pivot + 1, high);
+            END;
+    END;
+
+VAR arr[5] := [2, 4, 3, 5, 1], i;
+CONST n = SIZEOF(arr);
+BEGIN
+    writeln("Before sorting: $arr");
+    sort(arr, 0, n - 1);
+    writeln("After sorting: $arr");
+END.
