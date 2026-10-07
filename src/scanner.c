@@ -3,22 +3,24 @@
 #include <ctype.h>
 #include <stdlib.h>
 #include "scanner.h"
-
 #include "parser.h"
+#include "codegen.h"
 
 const Keyword keywords[KEYWORDS_COUNT] = {
 	{"AND", KW_AND},
 	{"BEGIN", KW_BEGIN},
+	{"CALL", KW_CALL},
 	{"CONST", KW_CONST},
 	{"DO", KW_DO},
 	{"DOWNTO", KW_DOWNTO},
 	{"ELSE", KW_ELSE},
 	{"END", KW_END},
 	{"FOR", KW_FOR},
+	{"FUNCTION", KW_FUNCTION},
 	{"IF", KW_IF},
 	{"NOT", KW_NOT},
 	{"NULL", KW_NULL},
-   	{"ODD",KW_ODD},
+   	{"ODD", KW_ODD},
 	{"OR", KW_OR},
 	{"PROCEDURE", KW_PROCEDURE},
 	{"PROGRAM", KW_PROGRAM},
@@ -26,6 +28,7 @@ const Keyword keywords[KEYWORDS_COUNT] = {
 	{"READLN", KW_READ},
 	{"RETURN", KW_RETURN},
 	{"SIZEOF", KW_SIZEOF},
+	{"STATIC", KW_STATIC},
 	{"STEP", KW_STEP},
 	{"THEN", KW_THEN},
 	{"TO", KW_TO},
@@ -36,8 +39,8 @@ const Keyword keywords[KEYWORDS_COUNT] = {
 };
 
 const char TabToken[][12] = {	"NONE", "IDENT", "NUMBER", "STRING",
-		"BEGIN", "CALL", "CONST", "DO",  "ELSE", "END", "FOR", "IF",
-		"ODD", "PROCEDURE", "PROGRAM", "READ", "RETURN", "SIZEOF", "THEN", "TO", "VAR", "WHILE", "WRITE", "WRITELN",
+		"BEGIN", "CALL", "CONST", "DO",  "ELSE", "END", "FOR", "FUNCTION", "IF",
+		"ODD", "PROCEDURE", "PROGRAM", "READ", "RETURN", "SIZEOF", "STATIC", "THEN", "TO", "VAR", "WHILE", "WRITE", "WRITELN",
 		"DOWNTO", "STEP",
 		"AND", "OR", "NOT", "NULL",
 
@@ -288,16 +291,17 @@ TokenType getToken() {
 	}
 }
 
-void compile(char * filename) {
+int compileSource(const char * filename) {
 	if((f = fopen(filename, "rt")) == NULL) {
 		fprintf(stderr, "File %s not found\n", filename);
-		exit(1);
+		return -1;
 	}
 	const char *ext = strrchr(filename, '.');
 	const char *expectedExt = ".pl0";
-	if (strcmp(ext, expectedExt) != 0) {
+	if (ext == NULL || strcmp(ext, expectedExt) != 0) {
 		fprintf(stderr, "Not PL/0 source file, expected *%s\n", expectedExt);
-		exit(1);
+		fclose(f);
+		return -1;
 	}
 	strncpy(currentSourceFile, filename, sizeof(currentSourceFile) - 1);
 	currentSourceFile[sizeof(currentSourceFile) - 1] = '\0';
@@ -311,4 +315,11 @@ void compile(char * filename) {
 	nextToken();
 	program();
 	fclose(f);
+	return 0;
+}
+
+void compile(char * filename) {
+	if (compileSource(filename) == 0) {
+		interpret();
+	}
 }

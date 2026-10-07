@@ -1,14 +1,15 @@
 PROGRAM Scope;
-VAR x;
+VAR x = 0;
 
 PROCEDURE P;
   VAR x;
   BEGIN
-    x := 1
+    x++;
+    WRITEln(x);
   END;
 
 BEGIN
-  x := 2;
-  P;
-  WRITE(x);
+  x++;
+  P();
+  WRITEln(x);
 END

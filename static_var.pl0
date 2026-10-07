@@ -1,0 +1,22 @@
+PROGRAM StaticVar;
+
+PROCEDURE p;
+    CONST max = 3 ;
+    VAR x = 0 STATIC;
+    BEGIN
+        IF x <= max THEN 
+        BEGIN
+            WRITEln("x = ", x);
+            x++;
+        END;
+        ELSE 
+            WRITEln("The maximum limit ($max) has been reached.");
+    END;
+
+BEGIN
+  p();
+  p();
+  p();
+  P();
+  P();
+END

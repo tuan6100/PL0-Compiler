@@ -7,7 +7,8 @@ typedef enum {
     OBJ_CONSTANT,
     OBJ_VARIABLE,
     OBJ_PARAMETER,
-    OBJ_PROCEDURE
+    OBJ_PROCEDURE,
+    OBJ_FUNCTION
 } ObjectType;
 
 #define MAX_PROC_PARAMS 16
@@ -28,7 +29,9 @@ typedef struct {
     int initSize; // Initialized element count for arrays (0 when not set)
     int isString; // 1 for STRING declarations, 0 otherwise
     int isRefParam; // 1 when this symbol is a VAR parameter
+    int isStatic; // 1 when symbol is declared STATIC
     int paramCount; // Procedure parameter count
+    int totalParamSlots; // Total slots taken by all formal parameters
     int paramIsRef[MAX_PROC_PARAMS]; // Procedure parameter passing mode
     int paramSize[MAX_PROC_PARAMS]; // Formal parameter size (1 for scalar, >1 for array)
     int paramDimCount[MAX_PROC_PARAMS]; // Formal parameter rank
@@ -51,12 +54,13 @@ typedef struct {
     int prev_count[MAX_NESTING_LEVEL]; // To restore count on block exit
 } SymbolTable;
 
-void initSymbolTable(void);
+void initSymbolTable();
+void enterObject(char *name, ObjectType type, double value, int size, int isString, int isStatic);
 void enter(char *name, ObjectType type, double value, int size, int isString);
 Object* lookup(char *name);
-void enterBlock(void);
-void exitBlock(void);
-int getVarCount(void);
-int getCurrentLevel(void);
+void enterBlock();
+void exitBlock();
+int getVarCount();
+int getCurrentLevel();
 
 #endif

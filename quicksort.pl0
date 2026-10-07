@@ -8,7 +8,7 @@ PROCEDURE swap(VAR x, VAR y);
         y := t;
     END;
 
-PROCEDURE partition(arr[], low, high);
+FUNCTION partition(arr[], low, high);
     VAR pivot := arr[high], i := low - 1, j;
     BEGIN
         FOR j := low TO high - 1 DO

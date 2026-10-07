@@ -1,14 +1,14 @@
 PROGRAM Circle;
 CONST PI = 3.1416;
 
-PROCEDURE calculateArea(radius);
+FUNCTION calculateArea(radius);
     BEGIN
-        RETURN PI * radius * radius
+        RETURN PI * radius * radius;
     END;
 
 PROCEDURE printArea(radius);
     BEGIN
-         WRITELN("The area of a circle with a radius of $radius is: ${calculateArea(radius)}")
+         WRITELN("The area of a circle with a radius of $radius is: ${calculateArea(radius)}");
     END;
 
 VAR r;
